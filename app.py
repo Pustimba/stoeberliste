@@ -4,9 +4,15 @@ für linke Subkultur und Politik
 """
 
 import os
+import re
+import hashlib
+import unicodedata
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_session import Session
+import requests
+from bs4 import BeautifulSoup
+from dateutil import parser as dateparser
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flask App Setup
@@ -22,95 +28,117 @@ app.config["SESSION_PERMANENT"] = False
 Session(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Veranstaltungsorte
+# Slugify Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-VENUES = {
-    "urania": {
-        "name": "Urania",
-        "url": "https://www.urania.de/kalender/",
-        "bezirk": "schoeneberg",
-        "adresse": "An der Urania 17, 10787 Berlin",
-    },
-    "zois": {
-        "name": "ZOiS",
-        "url": "https://www.zois-berlin.de/veranstaltungen",
-        "bezirk": "mitte",
-        "adresse": "Mohrenstraße 60, 10117 Berlin",
-    },
-    "publix": {
-        "name": "Publix",
-        "url": "https://www.publix.de/veranstaltungen",
-        "bezirk": "neukoelln",
-        "adresse": "Karl-Marx-Straße 83, 12043 Berlin",
-    },
-    "akademie-der-kuenste": {
-        "name": "Akademie der Künste",
-        "url": "https://adk.de/programm/veranstaltungskalender",
-        "bezirk": "mitte",
-        "adresse": "Pariser Platz 4, 10117 Berlin",
-    },
-    "haus-der-demokratie": {
-        "name": "Haus der Demokratie",
-        "url": "https://www.hausderdemokratie.de/veranstaltung",
-        "bezirk": "prenzlauer-berg",
-        "adresse": "Greifswalder Straße 4, 10405 Berlin",
-    },
-    "literaturforum-brecht-haus": {
-        "name": "Literaturforum im Brecht-Haus",
-        "url": "https://lfbrecht.de/events/",
-        "bezirk": "mitte",
-        "adresse": "Chausseestraße 125, 10115 Berlin",
-    },
-    "literaturhaus-berlin": {
-        "name": "Literaturhaus Berlin",
-        "url": "https://li-be.de/",
-        "bezirk": "wilmersdorf",
-        "adresse": "Fasanenstraße 23, 10719 Berlin",
-    },
-    "brotfabrik": {
-        "name": "Brotfabrik",
-        "url": "https://brotfabrik-berlin.de/",
-        "bezirk": "weissensee",
-        "adresse": "Caligariplatz 1, 13086 Berlin",
-    },
-    "z-bar": {
-        "name": "Z-Bar",
-        "url": "https://zbarberlin.com/kulturprogramm/",
-        "bezirk": "mitte",
-        "adresse": "Bergstraße 2, 10115 Berlin",
-    },
-    "flutgraben": {
-        "name": "Flutgraben",
-        "url": "https://flutgraben.org/aktuell/filter/events/",
-        "bezirk": "kreuzberg",
-        "adresse": "Am Flutgraben 3, 12435 Berlin",
-    },
-    "haus-der-statistik": {
-        "name": "Haus der Statistik / Sinema Transtopia",
-        "url": "https://hausderstatistik.org/programm/",
-        "bezirk": "mitte",
-        "adresse": "Karl-Marx-Allee 1, 10178 Berlin",
-    },
-    "renaissance-theater": {
-        "name": "Renaissance-Theater",
-        "url": "https://renaissance-theater.de/spielplan/",
-        "bezirk": "charlottenburg",
-        "adresse": "Knesebeckstraße 100, 10623 Berlin",
-    },
-    "einstein-forum": {
-        "name": "Einstein Forum",
-        "url": "https://www.einsteinforum.de/programm/",
-        "bezirk": "potsdam",
-        "adresse": "Am Neuen Markt 7, 14467 Potsdam",
-    },
-    "stressfaktor": {
-        "name": "Stressfaktor",
-        "url": "https://stressfaktor.squat.net/termine",
-        "bezirk": "diverse",
-        "adresse": None,
-    },
-}
+def slugify(text: str) -> str:
+    """Konvertiert Text zu URL-freundlichem Slug."""
+    if not text:
+        return ""
+    # Normalize unicode
+    text = unicodedata.normalize("NFKD", text)
+    # Replace umlauts
+    replacements = {
+        "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+        "Ä": "ae", "Ö": "oe", "Ü": "ue",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # Remove accents
+    text = text.encode("ascii", "ignore").decode("ascii")
+    # Lowercase and replace spaces/special chars
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    return text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dynamische Veranstaltungsorte (wird durch Scraper befüllt)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Basis-Venues (manuell gepflegt)
+VENUES = {}
+
+# Dynamisch entdeckte Venues (durch Scraper)
+_DYNAMIC_VENUES: dict[str, dict] = {}
+
+
+def get_all_venues() -> dict[str, dict]:
+    """Gibt alle Venues zurück (statisch + dynamisch)."""
+    all_venues = dict(VENUES)
+    all_venues.update(_DYNAMIC_VENUES)
+    return all_venues
+
+
+def get_or_create_venue(name: str, adresse: str = None, bezirk: str = None, url: str = None) -> str:
+    """Holt existierenden Venue oder erstellt neuen. Gibt Slug zurück."""
+    slug = slugify(name)
+    if not slug:
+        return "unbekannt"
+
+    all_venues = get_all_venues()
+    if slug in all_venues:
+        return slug
+
+    # Bezirk aus PLZ ermitteln falls nicht angegeben
+    if not bezirk and adresse:
+        bezirk = _bezirk_from_plz(adresse)
+
+    _DYNAMIC_VENUES[slug] = {
+        "name": name,
+        "url": url,
+        "bezirk": bezirk or "diverse",
+        "adresse": adresse,
+    }
+    return slug
+
+
+def _bezirk_from_plz(adresse: str) -> str:
+    """Ermittelt Bezirk aus Postleitzahl in Adresse."""
+    if not adresse:
+        return "diverse"
+
+    # PLZ-Mapping (vereinfacht)
+    plz_match = re.search(r"\b(1\d{4})\b", adresse)
+    if not plz_match:
+        return "diverse"
+
+    plz = plz_match.group(1)
+    plz_prefix = plz[:3]
+
+    # Grobe Zuordnung
+    bezirk_map = {
+        "101": "mitte",
+        "102": "mitte",
+        "103": "prenzlauer-berg",
+        "104": "prenzlauer-berg",
+        "105": "friedrichshain",
+        "106": "kreuzberg",
+        "107": "schoeneberg",
+        "108": "mitte",
+        "109": "kreuzberg",
+        "120": "kreuzberg",
+        "121": "neukoelln",
+        "122": "treptow",
+        "124": "treptow",
+        "125": "neukoelln",
+        "130": "weissensee",
+        "131": "weissensee",
+        "133": "wedding",
+        "134": "wedding",
+        "135": "reinickendorf",
+        "136": "lichtenberg",
+        "139": "pankow",
+        "140": "charlottenburg",
+        "141": "charlottenburg",
+        "144": "potsdam",
+        "145": "wilmersdorf",
+        "146": "steglitz",
+    }
+
+    return bezirk_map.get(plz_prefix, "diverse")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bezirke
@@ -126,6 +154,12 @@ BEZIRKE = {
     "schoeneberg": "Schöneberg",
     "wilmersdorf": "Wilmersdorf",
     "weissensee": "Weißensee",
+    "wedding": "Wedding",
+    "treptow": "Treptow",
+    "lichtenberg": "Lichtenberg",
+    "steglitz": "Steglitz",
+    "reinickendorf": "Reinickendorf",
+    "pankow": "Pankow",
     "potsdam": "Potsdam",
     "diverse": "Diverse",
 }
@@ -144,6 +178,7 @@ EVENT_TYPES = {
     "theater": "Theater & Performance",
     "ausstellung": "Ausstellung",
     "politik": "Politik & Aktion",
+    "sonstiges": "Sonstiges",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +196,7 @@ TIME_SLOTS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# In-Memory Event Cache (wird durch Scraper befüllt)
+# In-Memory Event Cache
 # ─────────────────────────────────────────────────────────────────────────────
 
 _EVENT_CACHE: list[dict] = []
@@ -193,6 +228,211 @@ def get_events_by_bezirk(bezirk_slug: str) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stressfaktor Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+GERMAN_MONTHS = {
+    "januar": 1, "februar": 2, "märz": 3, "april": 4,
+    "mai": 5, "juni": 6, "juli": 7, "august": 8,
+    "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+}
+
+
+def _parse_german_date(text: str) -> datetime | None:
+    """Parst deutsches Datum wie 'So., 1. März 2026'."""
+    if not text:
+        return None
+
+    # Extrahiere Tag, Monat, Jahr
+    match = re.search(r"(\d{1,2})\.\s*(\w+)\s*(\d{4})", text)
+    if not match:
+        return None
+
+    day = int(match.group(1))
+    month_name = match.group(2).lower()
+    year = int(match.group(3))
+
+    month = GERMAN_MONTHS.get(month_name)
+    if not month:
+        return None
+
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def _classify_event_type(title: str, description: str = "") -> str:
+    """Klassifiziert Event-Typ basierend auf Titel/Beschreibung."""
+    text = (title + " " + description).lower()
+
+    if any(w in text for w in ["lesung", "buchvorstellung", "autor", "literatur"]):
+        return "lesung"
+    if any(w in text for w in ["diskussion", "vortrag", "gespräch", "debatte", "panel", "podium"]):
+        return "diskussion"
+    if any(w in text for w in ["film", "kino", "screening", "dokumentar"]):
+        return "film"
+    if any(w in text for w in ["konzert", "musik", "live", "band", "dj"]):
+        return "konzert"
+    if any(w in text for w in ["party", "tanzen", "club", "rave"]):
+        return "party"
+    if any(w in text for w in ["workshop", "kurs", "seminar", "training"]):
+        return "workshop"
+    if any(w in text for w in ["theater", "performance", "bühne", "schauspiel"]):
+        return "theater"
+    if any(w in text for w in ["ausstellung", "vernissage", "galerie", "kunst"]):
+        return "ausstellung"
+    if any(w in text for w in ["demo", "kundgebung", "protest", "plenum", "versammlung", "aktion"]):
+        return "politik"
+
+    return "sonstiges"
+
+
+def scrape_stressfaktor() -> list[dict]:
+    """Scraped Events von stressfaktor.squat.net."""
+    events = []
+
+    try:
+        resp = requests.get(
+            "https://stressfaktor.squat.net/termine",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Stressfaktor] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    current_date = None
+
+    # Iteriere durch alle relevanten Elemente
+    for elem in soup.select("h3, .views-row"):
+        # Datums-Header
+        if elem.name == "h3":
+            date_text = elem.get_text(strip=True)
+            parsed_date = _parse_german_date(date_text)
+            if parsed_date:
+                current_date = parsed_date
+            continue
+
+        # Event-Row
+        if "views-row" not in elem.get("class", []):
+            continue
+
+        if not current_date:
+            continue
+
+        # Titel
+        title_elem = elem.select_one(".views-field-title h4 a")
+        if not title_elem:
+            continue
+
+        title = title_elem.get_text(strip=True)
+        link = title_elem.get("href", "")
+        if link and not link.startswith("http"):
+            link = "https://stressfaktor.squat.net" + link
+
+        # Zeit
+        time_elem = elem.select_one(".views-field-field-date-time time")
+        time_str = ""
+        if time_elem:
+            time_str = time_elem.get_text(strip=True)
+            # Auch datetime-Attribut nutzen falls vorhanden
+            dt_attr = time_elem.get("datetime", "")
+            if dt_attr and "T" in dt_attr:
+                try:
+                    dt_parsed = dateparser.parse(dt_attr)
+                    if dt_parsed:
+                        current_date = current_date.replace(
+                            hour=dt_parsed.hour,
+                            minute=dt_parsed.minute
+                        )
+                except Exception:
+                    pass
+
+        # Ort
+        venue_elem = elem.select_one(".views-field-nothing a")
+        venue_name = venue_elem.get_text(strip=True) if venue_elem else "Unbekannt"
+
+        # Adresse
+        adresse_elem = elem.select_one(".location .address")
+        adresse = ""
+        if adresse_elem:
+            # Extrahiere Adresse aus den span-Elementen
+            parts = []
+            street = adresse_elem.select_one(".address-line1")
+            if street:
+                parts.append(street.get_text(strip=True))
+            plz = adresse_elem.select_one(".postal-code")
+            city = adresse_elem.select_one(".locality")
+            if plz and city:
+                parts.append(f"{plz.get_text(strip=True)} {city.get_text(strip=True)}")
+            adresse = ", ".join(parts)
+
+        # Beschreibung
+        desc_elem = elem.select_one(".views-field-body")
+        description = desc_elem.get_text(strip=True) if desc_elem else ""
+
+        # Venue registrieren/holen
+        venue_slug = get_or_create_venue(
+            name=venue_name,
+            adresse=adresse,
+            url=f"https://stressfaktor.squat.net{venue_elem.get('href', '')}" if venue_elem else None,
+        )
+
+        # Event-Typ klassifizieren
+        event_type = _classify_event_type(title, description)
+
+        # Event-ID generieren
+        event_id = hashlib.md5(f"{link}{current_date.isoformat()}".encode()).hexdigest()[:12]
+
+        # Bezirk vom Venue holen
+        all_venues = get_all_venues()
+        bezirk = all_venues.get(venue_slug, {}).get("bezirk", "diverse")
+
+        events.append({
+            "id": event_id,
+            "title": title,
+            "date": current_date,
+            "time": time_str,
+            "venue_slug": venue_slug,
+            "venue_name": venue_name,
+            "bezirk": bezirk,
+            "type": event_type,
+            "description": description,
+            "link": link,
+            "source": "stressfaktor",
+        })
+
+    print(f"[Stressfaktor] {len(events)} Events geladen, {len(_DYNAMIC_VENUES)} Venues")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache Refresh
+# ─────────────────────────────────────────────────────────────────────────────
+
+def refresh_cache():
+    """Aktualisiert den Event-Cache von allen Quellen."""
+    global _EVENT_CACHE
+
+    all_events = []
+
+    # Stressfaktor
+    all_events.extend(scrape_stressfaktor())
+
+    # TODO: Weitere Scraper hier hinzufügen
+
+    # Sortieren nach Datum
+    all_events.sort(key=lambda x: x.get("date", datetime.max))
+
+    _EVENT_CACHE = all_events
+    print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -207,7 +447,7 @@ def index():
     return render_template(
         "index.html",
         events=events,
-        venues=VENUES,
+        venues=get_all_venues(),
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
     )
@@ -233,7 +473,7 @@ def tag(datum: str):
         "tag.html",
         events=events,
         datum=target_date,
-        venues=VENUES,
+        venues=get_all_venues(),
         bezirke=BEZIRKE,
     )
 
@@ -241,10 +481,11 @@ def tag(datum: str):
 @app.route("/ort/<slug>")
 def ort(slug: str):
     """Events für einen bestimmten Veranstaltungsort."""
-    if slug not in VENUES:
+    all_venues = get_all_venues()
+    if slug not in all_venues:
         return redirect(url_for("index"))
 
-    venue = VENUES[slug]
+    venue = all_venues[slug]
     events = get_events_by_venue(slug)
     events = sorted(events, key=lambda x: x.get("date", datetime.max))
 
@@ -253,7 +494,7 @@ def ort(slug: str):
         events=events,
         venue=venue,
         venue_slug=slug,
-        venues=VENUES,
+        venues=all_venues,
     )
 
 
@@ -308,7 +549,7 @@ def woche():
     return render_template(
         "woche.html",
         week_events=week_events,
-        venues=VENUES,
+        venues=get_all_venues(),
     )
 
 
@@ -373,7 +614,7 @@ def merkliste():
     return render_template(
         "merkliste.html",
         events=events,
-        venues=VENUES,
+        venues=get_all_venues(),
     )
 
 
@@ -395,6 +636,13 @@ def toggle_merkliste():
 
     session["saved_events"] = saved
     return jsonify({"added": added, "count": len(saved)})
+
+
+@app.route("/refresh")
+def refresh():
+    """Manuelles Cache-Refresh (für Entwicklung)."""
+    refresh_cache()
+    return redirect(url_for("index"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -419,6 +667,15 @@ def _event_in_time_range(event: dict, start_hour: int, end_hour: int) -> bool:
         return start_hour <= hour < end_hour
     except (ValueError, IndexError):
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Startup
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Cache beim Start laden
+print("[Startup] Lade Events...")
+refresh_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
