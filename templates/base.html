@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Kleine Terminliste{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="{{ url_for('index') }}" class="logo">Kleine Terminliste</a>
+        <ul>
+            <li><a href="{{ url_for('index') }}">Start</a></li>
+            <li><a href="{{ url_for('tag', datum='heute') }}">Heute</a></li>
+            <li><a href="{{ url_for('tag', datum='morgen') }}">Morgen</a></li>
+            <li><a href="{{ url_for('woche') }}">Woche</a></li>
+            <li><a href="{{ url_for('suche') }}">Suche</a></li>
+            <li><a href="{{ url_for('merkliste') }}">Merkliste</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>Kleine Terminliste &mdash; Berliner Veranstaltungskalender</p>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+env/
+
+# Flask
+instance/
+.webassets-cache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Database & Cache
+*.db
+*.sqlite
+*.sqlite3
+search_index/
+flask_session/
+
+# Data files
+cached_events.json
+event_cache.json
+merkliste.json
+
+# Logs
+*.log
