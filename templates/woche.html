@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Wochenübersicht - Kleine Terminliste{% endblock %}
+
+{% block content %}
+<h1>Diese Woche</h1>
+
+{% for day, events in week_events.items() %}
+<section class="day-section">
+    <h2>{{ day.strftime('%A, %d. %B') }}</h2>
+
+    {% if events %}
+    <div class="event-list">
+        {% for event in events %}
+        <article class="event-card compact">
+            <div class="event-details">
+                <p class="event-meta">
+                    <span class="time">{{ event.time or '—' }}</span>
+                    <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_name }}</a>
+                </p>
+                <h3><a href="{{ event.link }}">{{ event.title }}</a></h3>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-events">Keine Veranstaltungen</p>
+    {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

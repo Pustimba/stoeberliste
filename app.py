@@ -483,7 +483,15 @@ def ort(slug: str):
     """Events für einen bestimmten Veranstaltungsort."""
     all_venues = get_all_venues()
     if slug not in all_venues:
-        return redirect(url_for("index"))
+        # Vielleicht existiert der Venue noch nicht - 404 statt redirect
+        return render_template(
+            "ort.html",
+            events=[],
+            venue={"name": slug.replace("-", " ").title(), "adresse": None, "url": None},
+            venue_slug=slug,
+            venues=all_venues,
+            event_types=EVENT_TYPES,
+        )
 
     venue = all_venues[slug]
     events = get_events_by_venue(slug)
@@ -495,6 +503,7 @@ def ort(slug: str):
         venue=venue,
         venue_slug=slug,
         venues=all_venues,
+        event_types=EVENT_TYPES,
     )
 
 
