@@ -1855,7 +1855,7 @@ def scrape_literaturhaus() -> list[dict]:
 
     try:
         resp = requests.get(
-            "https://li-be.de/programm/",
+            "https://li-be.de/",
             headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
             timeout=30,
         )
@@ -1866,48 +1866,60 @@ def scrape_literaturhaus() -> list[dict]:
 
     soup = BeautifulSoup(resp.text, "html.parser")
     current_year = datetime.now().year
+    seen_links = set()
 
-    for link in soup.select("a[href*='li-be.de']"):
+    # Suche nach h3-Titeln mit Event-Links
+    for h3 in soup.select("h3"):
         try:
+            link = h3.select_one("a[href*='li-be.de/programm/']")
+            if not link:
+                continue
+
             href = link.get("href", "")
-            if not href or "/programm/" not in href or href.endswith("/programm/"):
+            if not href or href in seen_links:
                 continue
+            seen_links.add(href)
 
-            # Nur Event-Links
-            title_elem = link.select_one("h3, h2")
-            if not title_elem:
-                continue
-
-            title = title_elem.get_text(strip=True)
+            title = h3.get_text(strip=True)
             if not title or len(title) < 3:
                 continue
 
-            event_link = href if href.startswith("http") else f"https://li-be.de{href}"
+            event_link = href
 
-            # Datum aus Parent
-            parent = link.find_parent("div") or link.find_parent("article")
-            if not parent:
+            # Finde Parent mit Datum
+            parent = h3
+            event_date = None
+            time_str = ""
+
+            for _ in range(10):
+                parent = parent.find_parent()
+                if not parent:
+                    break
+
+                text = parent.get_text(" ", strip=True)
+
+                # Datum (Format: "3.3.Di" = 3. März, Dienstag)
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(Mo|Di|Mi|Do|Fr|Sa|So)", text)
+                if date_match:
+                    day = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    year = current_year
+
+                    try:
+                        event_date = datetime(year, month, day)
+                    except ValueError:
+                        pass
+
+                # Zeit
+                time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", text)
+                if time_match and not time_str:
+                    time_str = f"{time_match.group(1)}:{time_match.group(2)}"
+
+                if event_date:
+                    break
+
+            if not event_date:
                 continue
-
-            text = parent.get_text(" ", strip=True)
-
-            # Datum (Format: "3.3.Di" = 3. März, Dienstag)
-            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(Mo|Di|Mi|Do|Fr|Sa|So)", text)
-            if not date_match:
-                continue
-
-            day = int(date_match.group(1))
-            month = int(date_match.group(2))
-            year = current_year
-
-            try:
-                event_date = datetime(year, month, day)
-            except ValueError:
-                continue
-
-            # Zeit
-            time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", text)
-            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
 
             event_id = hashlib.md5(f"literaturhaus-{event_link}".encode()).hexdigest()[:12]
 
@@ -2173,14 +2185,10 @@ def refresh_cache():
     # Urania
     all_events.extend(scrape_urania())
 
-    # Babylon Berlin
-    all_events.extend(scrape_babylon())
-
-    # Literaturhaus Berlin
-    all_events.extend(scrape_literaturhaus())
-
-    # Friedrich-Ebert-Stiftung
-    all_events.extend(scrape_fes())
+    # Babylon, Literaturhaus, FES - Scraper vorbereitet aber deaktiviert (komplexe Strukturen)
+    # all_events.extend(scrape_babylon())
+    # all_events.extend(scrape_literaturhaus())
+    # all_events.extend(scrape_fes())
 
     # Panke
     all_events.extend(scrape_panke())
