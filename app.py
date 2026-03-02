@@ -1000,6 +1000,7 @@ def tag(datum: str):
         datum=target_date,
         venues=get_all_venues(),
         bezirke=BEZIRKE,
+        event_types=EVENT_TYPES,
     )
 
 
@@ -1016,6 +1017,7 @@ def ort(slug: str):
             venue_slug=slug,
             venues=all_venues,
             event_types=EVENT_TYPES,
+            bezirke=BEZIRKE,
         )
 
     venue = all_venues[slug]
@@ -1029,6 +1031,7 @@ def ort(slug: str):
         venue_slug=slug,
         venues=all_venues,
         event_types=EVENT_TYPES,
+        bezirke=BEZIRKE,
     )
 
 
@@ -1047,6 +1050,8 @@ def typ(slug: str):
         event_type=EVENT_TYPES[slug],
         type_slug=slug,
         event_types=EVENT_TYPES,
+        bezirke=BEZIRKE,
+        venues=get_all_venues(),
     )
 
 
@@ -1065,6 +1070,8 @@ def bezirk(slug: str):
         bezirk=BEZIRKE[slug],
         bezirk_slug=slug,
         bezirke=BEZIRKE,
+        event_types=EVENT_TYPES,
+        venues=get_all_venues(),
     )
 
 
@@ -1084,6 +1091,8 @@ def woche():
         "woche.html",
         week_events=week_events,
         venues=get_all_venues(),
+        bezirke=BEZIRKE,
+        event_types=EVENT_TYPES,
     )
 
 
@@ -1131,6 +1140,7 @@ def suche():
         query=query,
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
+        venues=get_all_venues(),
         time_slots=TIME_SLOTS,
         selected_bezirke=bezirk_filter,
         selected_types=typ_filter,
@@ -1149,6 +1159,8 @@ def merkliste():
         "merkliste.html",
         events=events,
         venues=get_all_venues(),
+        bezirke=BEZIRKE,
+        event_types=EVENT_TYPES,
     )
 
 
