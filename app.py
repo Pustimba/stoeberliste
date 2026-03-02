@@ -472,49 +472,77 @@ def scrape_rosalux() -> list[dict]:
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
+    seen_links = set()
 
     for link in soup.select("a[href*='/veranstaltung/es_detail/']"):
         try:
-            title = link.get_text(strip=True)
-            if not title or len(title) < 3:
+            href = link.get("href", "")
+            if not href or href in seen_links:
+                continue
+            seen_links.add(href)
+
+            raw_title = link.get_text(strip=True)
+            if not raw_title or len(raw_title) < 3:
                 continue
 
-            href = link.get("href", "")
             event_link = f"https://www.rosalux.de{href}" if href.startswith("/") else href
+
+            # Titel enthält Datum: "Event-Name, 20 Februar 2026" oder "Event-Name, 20 Februar 2026 - 23 März 2026"
+            # Trenne Titel vom Datum
+            title_date_match = re.match(r"^(.+?),\s*(\d{1,2})\s+(\w+)\s+(\d{4})", raw_title)
+            if title_date_match:
+                title = title_date_match.group(1).strip()
+                day = int(title_date_match.group(2))
+                month_name = title_date_match.group(3).lower()
+                year = int(title_date_match.group(4))
+            else:
+                # Fallback: Titel ohne Datum-Suffix
+                title = re.sub(r",\s*\d{1,2}\s+\w+.*$", "", raw_title).strip()
+                day, month_name, year = None, None, None
+
+            if not title or len(title) < 3:
+                continue
 
             # Finde Parent-Container für Metadaten
             parent = link.find_parent("div") or link.find_parent("li")
             if not parent:
                 continue
 
-            # Datum/Zeit/Ort aus dem Text extrahieren
             full_text = parent.get_text(" ", strip=True)
 
-            # Datum parsen (Format: "20Februar2026" oder "20. Februar 2026")
-            date_match = re.search(r"(\d{1,2})\.?\s*(\w+)\s*(\d{4})", full_text)
-            if not date_match:
-                continue
+            # Falls Datum nicht aus Titel extrahiert, aus full_text
+            if not day:
+                date_match = re.search(r"(\d{1,2})\s+(\w+)\s+(\d{4})", full_text)
+                if not date_match:
+                    continue
+                day = int(date_match.group(1))
+                month_name = date_match.group(2).lower()
+                year = int(date_match.group(3))
 
-            day = int(date_match.group(1))
-            month_name = date_match.group(2).lower()
-            year = int(date_match.group(3))
             month = GERMAN_MONTHS.get(month_name)
             if not month:
                 continue
 
-            event_date = datetime(year, month, day)
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
 
-            # Zeit extrahieren
-            time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", full_text)
+            # Zeit extrahieren (Format: "19:30 Uhr" oder nur "19:30")
+            time_match = re.search(r"(\d{1,2}):(\d{2})(?:\s*Uhr)?", full_text)
             time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
 
-            # Ort (Berlin oder online)
-            location = "Berlin"
-            if "online" in full_text.lower():
-                location = "Online"
-
-            # Beschreibung (nehme Text nach dem Datum)
+            # Beschreibung: Text nach Uhrzeit oder Ort
+            # Typisches Format: "01 März 2026 Berlin 19:30 Uhr Beschreibungstext"
             description = ""
+            # Suche nach Text nach "Uhr"
+            desc_match = re.search(r"\d{1,2}:\d{2}\s*Uhr\s+(.+?)$", full_text)
+            if desc_match:
+                desc_text = desc_match.group(1).strip()
+                # Entferne Kategorien/Reihen am Anfang
+                desc_text = re.sub(r"^(Diskussion/Vortrag|Ausstellung/Kultur|Film|Konzert|Workshop|Seminar|ausgebucht)\s*", "", desc_text)
+                if len(desc_text) > 5:
+                    description = desc_text
 
             event_id = hashlib.md5(f"rosalux-{event_link}".encode()).hexdigest()[:12]
 
@@ -534,7 +562,7 @@ def scrape_rosalux() -> list[dict]:
                 "link": event_link,
                 "source": "rosalux",
             })
-        except Exception as e:
+        except Exception:
             continue
 
     print(f"[RosaLux] {len(events)} Events geladen")

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import event_list_with_dates %}
 
 {% block title %}{{ venue.name }} - Kleine Terminliste{% endblock %}
 
@@ -10,37 +11,12 @@
 {% endif %}
 
 {% if venue.url %}
-<p style="margin-bottom: 1.5rem;"><a href="{{ venue.url }}" target="_blank" style="color: var(--orange);">Website besuchen &rarr;</a></p>
+<p style="margin-bottom: 1.5rem;"><a href="{{ venue.url }}" target="_blank" style="color: var(--accent);">Website besuchen &rarr;</a></p>
 {% endif %}
 
 <div class="event-list">
     {% if events %}
-        {% for event in events %}
-        <article class="event-card">
-            <div class="venue-panel">
-                <a href="{{ url_for('ort', slug=event.venue_slug) }}" class="venue-panel-link">
-                    <span class="venue-name-fallback">{{ event.venue_name }}</span>
-                </a>
-            </div>
-            <div class="event-details">
-                <p class="event-meta">
-                    <span class="event-date-badge">{{ event.date.strftime('%d.%m.') }} {{ event.time or '' }}</span>
-                    {% if event.type %}
-                    <span class="event-type-badge">{{ event_types.get(event.type, event.type) }}</span>
-                    {% endif %}
-                </p>
-                <h2><a href="{{ event.link }}" target="_blank" rel="noopener">{{ event.title }}</a></h2>
-                {% if event.description %}
-                <p class="event-description">{{ event.description[:250] }}{% if event.description|length > 250 %}...{% endif %}</p>
-                {% endif %}
-                <button type="button" class="merken-toggle{% if event.id in session.get('merkliste', []) %} marked{% endif %}" data-event-id="{{ event.id }}" aria-label="Merken">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                </button>
-            </div>
-        </article>
-        {% endfor %}
+        {{ event_list_with_dates(events, event_types, show_venue=false) }}
     {% else %}
         <p class="no-events">Keine Veranstaltungen an diesem Ort.</p>
     {% endif %}

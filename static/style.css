@@ -696,7 +696,26 @@ h2 {
 .event-list {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
+}
+
+/* Date Separator */
+.date-separator {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--accent);
+}
+
+.date-separator:first-child {
+  margin-top: 0;
+}
+
+.date-separator-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: capitalize;
 }
 
 .event-card {
