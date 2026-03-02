@@ -300,12 +300,6 @@ def scrape_stressfaktor() -> list[dict]:
     # Nur diese Venues von Stressfaktor scrapen (lowercase für Vergleich)
     # Venues mit eigenem Scraper (wie Baiz) werden hier ausgeschlossen
     ALLOWED_VENUES = {
-        "schokoladen": {
-            "name": "Schokoladen",
-            "adresse": "Ackerstraße 169, 10115 Berlin",
-            "bezirk": "mitte",
-            "url": "https://schokoladen-mitte.de",
-        },
         "kubiz": {
             "name": "KuBiZ",
             "adresse": "Bernkasteler Straße 78, 13088 Berlin",
@@ -450,7 +444,7 @@ def scrape_stressfaktor() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scrape_rosalux() -> list[dict]:
-    """Scraped Events von rosalux.de/veranstaltungen."""
+    """Scraped Events von rosalux.de/veranstaltungen - nur Berlin Events."""
     events = []
     venue_name = "Rosa-Luxemburg-Stiftung"
     venue_slug = get_or_create_venue(
@@ -472,52 +466,50 @@ def scrape_rosalux() -> list[dict]:
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
-    seen_links = set()
 
-    for link in soup.select("a[href*='/veranstaltung/es_detail/']"):
+    # Iteriere über Event-Teaser statt nur Links
+    for teaser in soup.select(".teaser--event"):
         try:
-            href = link.get("href", "")
-            if not href or href in seen_links:
+            # Link und Titel
+            link = teaser.select_one("a[href*='/veranstaltung/es_detail/']")
+            if not link:
                 continue
-            seen_links.add(href)
 
-            raw_title = link.get_text(strip=True)
-            if not raw_title or len(raw_title) < 3:
+            href = link.get("href", "")
+            if not href:
+                continue
+
+            # ORT PRÜFEN: Nur Berlin-Events behalten
+            location_elem = teaser.select_one(".teaser__date-group--right span")
+            if not location_elem:
+                continue
+
+            location = location_elem.get_text(strip=True).lower()
+            # Nur Berlin oder Online Events
+            if location not in ("berlin", "online"):
+                continue
+
+            # Titel extrahieren
+            title_elem = teaser.select_one(".teaser__title-text")
+            if not title_elem:
+                continue
+            title = title_elem.get_text(strip=True)
+            if not title or len(title) < 3:
                 continue
 
             event_link = f"https://www.rosalux.de{href}" if href.startswith("/") else href
 
-            # Titel enthält Datum: "Event-Name, 20 Februar 2026" oder "Event-Name, 20 Februar 2026 - 23 März 2026"
-            # Trenne Titel vom Datum
-            title_date_match = re.match(r"^(.+?),\s*(\d{1,2})\s+(\w+)\s+(\d{4})", raw_title)
-            if title_date_match:
-                title = title_date_match.group(1).strip()
-                day = int(title_date_match.group(2))
-                month_name = title_date_match.group(3).lower()
-                year = int(title_date_match.group(4))
-            else:
-                # Fallback: Titel ohne Datum-Suffix
-                title = re.sub(r",\s*\d{1,2}\s+\w+.*$", "", raw_title).strip()
-                day, month_name, year = None, None, None
+            # Datum aus Struktur extrahieren
+            day_elem = teaser.select_one(".teaser__date-day")
+            month_elem = teaser.select_one(".teaser__date-month")
+            year_elem = teaser.select_one(".teaser__date-year")
 
-            if not title or len(title) < 3:
+            if not (day_elem and month_elem and year_elem):
                 continue
 
-            # Finde Parent-Container für Metadaten
-            parent = link.find_parent("div") or link.find_parent("li")
-            if not parent:
-                continue
-
-            full_text = parent.get_text(" ", strip=True)
-
-            # Falls Datum nicht aus Titel extrahiert, aus full_text
-            if not day:
-                date_match = re.search(r"(\d{1,2})\s+(\w+)\s+(\d{4})", full_text)
-                if not date_match:
-                    continue
-                day = int(date_match.group(1))
-                month_name = date_match.group(2).lower()
-                year = int(date_match.group(3))
+            day = int(day_elem.get_text(strip=True))
+            month_name = month_elem.get_text(strip=True).lower()
+            year = int(year_elem.get_text(strip=True))
 
             month = GERMAN_MONTHS.get(month_name)
             if not month:
@@ -528,26 +520,39 @@ def scrape_rosalux() -> list[dict]:
             except ValueError:
                 continue
 
-            # Zeit extrahieren (Format: "19:30 Uhr" oder nur "19:30")
-            time_match = re.search(r"(\d{1,2}):(\d{2})(?:\s*Uhr)?", full_text)
-            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+            # Zeit extrahieren
+            time_str = ""
+            time_spans = teaser.select(".teaser__date-group--right span")
+            for span in time_spans:
+                text = span.get_text(strip=True)
+                time_match = re.match(r"(\d{1,2}):(\d{2})", text)
+                if time_match:
+                    time_str = f"{time_match.group(1)}:{time_match.group(2)}"
+                    break
 
-            # Beschreibung: Text nach Uhrzeit oder Ort
-            # Typisches Format: "01 März 2026 Berlin 19:30 Uhr Beschreibungstext"
+            # Beschreibung
             description = ""
-            # Suche nach Text nach "Uhr"
-            desc_match = re.search(r"\d{1,2}:\d{2}\s*Uhr\s+(.+?)$", full_text)
-            if desc_match:
-                desc_text = desc_match.group(1).strip()
-                # Entferne Kategorien/Reihen am Anfang
-                desc_text = re.sub(r"^(Diskussion/Vortrag|Ausstellung/Kultur|Film|Konzert|Workshop|Seminar|ausgebucht)\s*", "", desc_text)
-                if len(desc_text) > 5:
-                    description = desc_text
+            desc_elem = teaser.select_one(".teaser__text")
+            if desc_elem:
+                description = desc_elem.get_text(strip=True)
+
+            # Event-Typ aus Kategorie
+            event_type = "diskussion"
+            meta_elem = teaser.select_one(".teaser__meta-event-text")
+            if meta_elem:
+                meta_text = meta_elem.get_text(strip=True).lower()
+                if "film" in meta_text:
+                    event_type = "film"
+                elif "konzert" in meta_text or "musik" in meta_text:
+                    event_type = "konzert"
+                elif "ausstellung" in meta_text or "kultur" in meta_text:
+                    event_type = "ausstellung"
+                elif "workshop" in meta_text or "seminar" in meta_text:
+                    event_type = "workshop"
+                elif "lesung" in meta_text:
+                    event_type = "lesung"
 
             event_id = hashlib.md5(f"rosalux-{event_link}".encode()).hexdigest()[:12]
-
-            # Typ klassifizieren
-            event_type = _classify_event_type(title, full_text)
 
             events.append({
                 "id": event_id,
@@ -565,7 +570,7 @@ def scrape_rosalux() -> list[dict]:
         except Exception:
             continue
 
-    print(f"[RosaLux] {len(events)} Events geladen")
+    print(f"[RosaLux] {len(events)} Events geladen (nur Berlin)")
     return events
 
 
@@ -2134,6 +2139,369 @@ def scrape_panke() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Kino Central Scraper (nur Specials)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_kino_central() -> list[dict]:
+    """Scraped nur Special Events von Kino Central (Stummfilm, Livemusik, Previews, Gäste)."""
+    events = []
+    venue_name = "Kino Central"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Rosenthaler Straße 39, 10178 Berlin",
+        bezirk="mitte",
+        url="https://kino-central.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://kino-central.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Kino Central] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Special-Indikatoren
+    SPECIAL_KEYWORDS = [
+        "livemusik", "stummfilm", "live", "konzert", "preview", "premiere",
+        "zu gast", "anwesenheit", "q&a", "talk", "gespräch", "special",
+        "sondervorstellung", "matinée", "matinee", "filmreihe",
+    ]
+
+    current_date = None
+
+    for elem in soup.select(".program_date1, .program_entry"):
+        try:
+            # Datum-Header
+            if "program_date1" in elem.get("class", []):
+                date_text = elem.get_text(strip=True)
+                # Format: "Dienstag, 24.03.2026"
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", date_text)
+                if date_match:
+                    day = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    year = int(date_match.group(3))
+                    try:
+                        current_date = datetime(year, month, day)
+                    except ValueError:
+                        current_date = None
+                continue
+
+            if not current_date:
+                continue
+
+            # Film-Eintrag
+            link = elem.select_one('a[title="Information über den Film"]')
+            if not link:
+                continue
+
+            text = link.get_text(strip=True)
+            href = link.get("href", "")
+
+            # Prüfe ob es ein Special ist
+            text_lower = text.lower()
+            is_special = any(kw in text_lower for kw in SPECIAL_KEYWORDS)
+
+            if not is_special:
+                continue
+
+            # Zeit extrahieren (z.B. "19:30 Alraune - Stummfilm...")
+            time_match = re.match(r"(\d{1,2}:\d{2})\s*(.+)", text)
+            if time_match:
+                time_str = time_match.group(1)
+                title = time_match.group(2).strip()
+            else:
+                time_str = ""
+                title = text
+
+            if not title:
+                continue
+
+            event_date = current_date
+            if time_match:
+                try:
+                    h, m = map(int, time_str.split(":"))
+                    event_date = event_date.replace(hour=h, minute=m)
+                except ValueError:
+                    pass
+
+            event_link = href if href.startswith("http") else f"https://kino-central.de{href}"
+            event_id = hashlib.md5(f"kinocentral-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": "film",
+                "description": "",
+                "link": event_link,
+                "source": "kino-central",
+            })
+        except Exception:
+            continue
+
+    print(f"[Kino Central] {len(events)} Special-Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lichtblick Kino Scraper (nur Specials/Filmreihen)
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENGLISH_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def scrape_lichtblick() -> list[dict]:
+    """Scraped nur Specials und Filmreihen von Lichtblick Kino."""
+    events = []
+    venue_name = "Lichtblick Kino"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Kastanienallee 77, 10435 Berlin",
+        bezirk="prenzlauer-berg",
+        url="https://lichtblick-kino.org",
+    )
+
+    try:
+        resp = requests.get(
+            "https://lichtblick-kino.org/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Lichtblick] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Finde Specials-Block
+    specials_block = soup.select_one(".block.specials")
+    if not specials_block:
+        print("[Lichtblick] Keine Specials gefunden")
+        return []
+
+    liste = specials_block.select_one(".liste")
+    if not liste:
+        return []
+
+    # Sammle alle Special-URLs
+    special_urls = []
+    for eintrag in liste.select(".eintrag"):
+        link = eintrag.select_one("a[href]")
+        if link:
+            href = link.get("href", "")
+            if "/special/" in href or "/reihe/" in href:
+                special_urls.append(href)
+
+    # Lade jede Special-Seite für Datum
+    for special_url in special_urls[:15]:  # Limit auf 15 Specials
+        try:
+            detail_resp = requests.get(
+                special_url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                timeout=20,
+            )
+            detail_resp.raise_for_status()
+            detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+            # Finde Datum (Format: "Wednesday, 18 March, 7:45 pm")
+            datum_elem = detail_soup.select_one("h4.datum")
+            if not datum_elem:
+                continue
+
+            datum_text = datum_elem.get_text(strip=True)
+            # Parse: "Wednesday, 18 March, 7:45 pm"
+            date_match = re.search(
+                r"(\d{1,2})\s+(\w+),?\s*(\d{1,2}):(\d{2})\s*(am|pm)?",
+                datum_text,
+                re.IGNORECASE
+            )
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month_name = date_match.group(2).lower()
+            hour = int(date_match.group(3))
+            minute = int(date_match.group(4))
+            ampm = date_match.group(5)
+
+            month = ENGLISH_MONTHS.get(month_name)
+            if not month:
+                continue
+
+            # AM/PM Konvertierung
+            if ampm and ampm.lower() == "pm" and hour < 12:
+                hour += 12
+            elif ampm and ampm.lower() == "am" and hour == 12:
+                hour = 0
+
+            # Jahr bestimmen
+            current_year = datetime.now().year
+            current_month = datetime.now().month
+            year = current_year
+            if month < current_month - 2:
+                year += 1
+
+            try:
+                event_date = datetime(year, month, day, hour, minute)
+            except ValueError:
+                continue
+
+            # Titel
+            titel_elem = detail_soup.select_one("h2.titel")
+            haupttitel_elem = detail_soup.select_one("h2.special_haupttitel")
+
+            title_parts = []
+            if haupttitel_elem:
+                title_parts.append(haupttitel_elem.get_text(strip=True))
+            if titel_elem:
+                title_parts.append(titel_elem.get_text(strip=True))
+
+            title = ": ".join(title_parts) if title_parts else "Unbekannt"
+
+            # Beschreibung
+            description = ""
+            intro_elem = detail_soup.select_one(".intro, .teaser")
+            if intro_elem:
+                description = intro_elem.get_text(strip=True)[:300]
+
+            time_str = f"{hour:02d}:{minute:02d}"
+            event_id = hashlib.md5(f"lichtblick-{special_url}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "prenzlauer-berg",
+                "type": "film",
+                "description": description,
+                "link": special_url,
+                "source": "lichtblick",
+            })
+        except Exception:
+            continue
+
+    print(f"[Lichtblick] {len(events)} Special-Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Festsaal Kreuzberg Scraper (via Wagtail API)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_festsaal() -> list[dict]:
+    """Scraped Events von Festsaal Kreuzberg via API."""
+    events = []
+    venue_name = "Festsaal Kreuzberg"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Skalitzer Straße 130, 10999 Berlin",
+        bezirk="kreuzberg",
+        url="https://festsaal-kreuzberg.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://admin.festsaal-kreuzberg.de/api/v2/pages/",
+            params={
+                "type": "home.EventPage",
+                "fields": "*",
+                "limit": 100,
+            },
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[Festsaal] Fehler beim Laden: {e}")
+        return []
+
+    today = datetime.now().date()
+
+    for item in data.get("items", []):
+        try:
+            title = item.get("title", "")
+            if not title:
+                continue
+
+            # Datum
+            date_str = item.get("date")
+            if not date_str:
+                continue
+
+            try:
+                event_date = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < today:
+                continue
+
+            # Status prüfen (abgesagt etc.)
+            status = item.get("status")
+            if status in ["cancelled", "ABGESAGT"]:
+                continue
+
+            # Zeit (Start oder Doors)
+            start_time = item.get("start") or item.get("doors")
+            time_str = ""
+            if start_time:
+                # Format: "20:00:00"
+                time_match = re.match(r"(\d{1,2}):(\d{2})", str(start_time))
+                if time_match:
+                    h, m = int(time_match.group(1)), int(time_match.group(2))
+                    time_str = f"{h:02d}:{m:02d}"
+                    event_date = event_date.replace(hour=h, minute=m)
+
+            # URL
+            url_path = item.get("url", "")
+            event_link = f"https://festsaal-kreuzberg.de{url_path}" if url_path else "https://festsaal-kreuzberg.de"
+
+            # Beschreibung
+            description = item.get("preview_text", "") or ""
+
+            event_id = hashlib.md5(f"festsaal-{item.get('id', '')}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "kreuzberg",
+                "type": "konzert",
+                "description": description[:300] if description else "",
+                "link": event_link,
+                "source": "festsaal",
+            })
+        except Exception:
+            continue
+
+    print(f"[Festsaal] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2192,6 +2560,15 @@ def refresh_cache():
 
     # Panke
     all_events.extend(scrape_panke())
+
+    # Kino Central (nur Specials)
+    all_events.extend(scrape_kino_central())
+
+    # Lichtblick Kino (nur Specials/Filmreihen)
+    all_events.extend(scrape_lichtblick())
+
+    # Festsaal Kreuzberg
+    all_events.extend(scrape_festsaal())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
