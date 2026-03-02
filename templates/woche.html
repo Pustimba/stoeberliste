@@ -15,10 +15,13 @@
         <article class="event-card compact">
             <div class="event-details">
                 <p class="event-meta">
-                    <span class="time">{{ event.time or '—' }}</span>
+                    <span class="event-date-badge">{{ event.time or '—' }}</span>
                     <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_name }}</a>
+                    {% if event.type %}
+                    <span class="event-type-badge">{{ event_types.get(event.type, event.type) }}</span>
+                    {% endif %}
                 </p>
-                <h3><a href="{{ event.link }}">{{ event.title }}</a></h3>
+                <h3><a href="{{ event.link }}" target="_blank" rel="noopener">{{ event.title }}</a></h3>
             </div>
         </article>
         {% endfor %}
