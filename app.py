@@ -640,16 +640,11 @@ def scrape_hau() -> list[dict]:
             time_match = re.search(r"(\d{1,2}):(\d{2})", text)
             time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
 
-            # Venue (HAU1, HAU2, HAU3)
-            venue_match = re.search(r"(HAU\d)", text)
-            if venue_match:
-                hau_name = venue_match.group(1)
-                venue_name = f"HAU {hau_name[-1]}"
-            else:
-                venue_name = "HAU Hebbel am Ufer"
-
+            # Venue - immer HAU Hebbel am Ufer (nicht HAU1/2/3 unterscheiden)
+            venue_name = "HAU Hebbel am Ufer"
             venue_slug = get_or_create_venue(
                 name=venue_name,
+                adresse="Stresemannstraße 29, 10963 Berlin",
                 bezirk="kreuzberg",
                 url="https://www.hebbel-am-ufer.de",
             )
@@ -978,6 +973,670 @@ def scrape_silentgreen() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cinema Surreal (Sammlung Scharf-Gerstenberg) Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_cinema_surreal() -> list[dict]:
+    """Scraped Events von smb.museum Cinema Surreal Filmreihe."""
+    events = []
+    venue_name = "Sammlung Scharf-Gerstenberg"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Schloßstraße 70, 14059 Berlin",
+        bezirk="charlottenburg",
+        url="https://www.smb.museum/museen-einrichtungen/sammlung-scharf-gerstenberg/",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.smb.museum/museen-einrichtungen/sammlung-scharf-gerstenberg/veranstaltungen/veranstaltungsreihe/cinema-surreal-2026/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[CinemaSurreal] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    for link in soup.select("a[href*='/veranstaltungen/detail/']"):
+        try:
+            title = link.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            href = link.get("href", "")
+            event_link = f"https://www.smb.museum{href}" if href.startswith("/") else href
+
+            # Parent für Datum
+            parent = link.find_parent("div")
+            if not parent:
+                continue
+
+            text = parent.get_text(" ", strip=True)
+
+            # Datum (Format: "04.03.2026 18:00 Uhr")
+            date_match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})\s+(\d{1,2}):(\d{2})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3))
+            hour = int(date_match.group(4))
+            minute = int(date_match.group(5))
+
+            try:
+                event_date = datetime(year, month, day, hour, minute)
+            except ValueError:
+                continue
+
+            time_str = f"{hour:02d}:{minute:02d}"
+
+            event_id = hashlib.md5(f"cinemasurreal-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "charlottenburg",
+                "type": "film",
+                "description": "Cinema Surreal Filmreihe",
+                "link": event_link,
+                "source": "cinemasurreal",
+            })
+        except Exception:
+            continue
+
+    print(f"[CinemaSurreal] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Acud Macht Neu Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_acud() -> list[dict]:
+    """Scraped Events von acudmachtneu.de."""
+    events = []
+    venue_name = "Acud Macht Neu"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Veteranenstraße 21, 10119 Berlin",
+        bezirk="mitte",
+        url="https://acudmachtneu.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://acudmachtneu.de/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Acud] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+    seen_links = set()
+
+    # Suche nach Datumspattern "Mo 2.3 → Concert"
+    for text_elem in soup.find_all(string=lambda t: t and any(day in str(t) for day in ["Mo ", "Di ", "Mi ", "Do ", "Fr ", "Sa ", "So "])):
+        try:
+            text = str(text_elem).strip()
+
+            # Pattern: "Mo 2.3 → Concert" oder "Fr 6.3 — So 5.4 → Exhibition"
+            date_match = re.search(r"(Mo|Di|Mi|Do|Fr|Sa|So)\s+(\d{1,2})\.(\d{1,2})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(2))
+            month = int(date_match.group(3))
+            year = current_year
+            current_month = datetime.now().month
+            if month < current_month and (current_month - month) > 2:
+                year += 1
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Event-Typ aus Text
+            type_text = text.lower()
+            if "concert" in type_text:
+                event_type = "konzert"
+            elif "club" in type_text:
+                event_type = "party"
+            elif "exhibition" in type_text:
+                event_type = "ausstellung"
+            elif "performance" in type_text:
+                event_type = "theater"
+            elif "film" in type_text or "screening" in type_text:
+                event_type = "film"
+            else:
+                event_type = "sonstiges"
+
+            # Finde nächsten Link für Titel
+            parent = text_elem.find_parent()
+            if not parent:
+                continue
+
+            next_link = parent.find_next("a", href=lambda h: h and "/events/" in h)
+            if not next_link:
+                continue
+
+            href = next_link.get("href", "")
+            if not href or href in seen_links:
+                continue
+            seen_links.add(href)
+
+            title = next_link.get_text(strip=True)
+            if not title or len(title) < 2:
+                continue
+
+            event_link = href if href.startswith("http") else f"https://acudmachtneu.de{href}"
+
+            event_id = hashlib.md5(f"acud-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": "",
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "acud",
+            })
+        except Exception:
+            continue
+
+    print(f"[Acud] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regenbogenfabrik Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_regenbogenfabrik() -> list[dict]:
+    """Scraped Events von regenbogenfabrik.de."""
+    events = []
+    venue_name = "Regenbogenfabrik"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Lausitzer Straße 22, 10999 Berlin",
+        bezirk="kreuzberg",
+        url="https://regenbogenfabrik.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://regenbogenfabrik.de/veranstaltungen/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Regenbogenfabrik] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    seen_links = set()
+
+    # Finde alle Event-Links
+    for link in soup.select("a[href*='regenbogenfabrik.de/']"):
+        try:
+            href = link.get("href", "")
+            # Filtere Navigations-Links
+            if not href or href in seen_links:
+                continue
+            if any(x in href for x in ["/veranstaltungen/", "/category/", "/tag/", "/#", "/page/"]):
+                continue
+            if href.endswith("/"):
+                href_clean = href.rstrip("/")
+            else:
+                href_clean = href
+
+            # Nur Event-Links (nicht Home, Kontakt, etc.)
+            if href_clean.count("/") < 3:
+                continue
+
+            seen_links.add(href)
+
+            # Titel aus Link-Text oder nächstem Text
+            title = link.get_text(strip=True)
+            if title == "Weiterlesen ›" or not title or len(title) < 3:
+                # Suche Titel im vorherigen Text
+                prev = link.find_previous(string=True)
+                if prev:
+                    title = prev.strip()
+
+            if not title or len(title) < 3 or title == "Weiterlesen ›":
+                continue
+
+            # Suche Datum im umgebenden Text
+            parent = link.find_parent("article") or link.find_parent("div")
+            if not parent:
+                continue
+
+            text = parent.get_text(" ", strip=True)
+
+            # Finde das nächste Datum vor diesem Link
+            # Format: "Donnerstag, 05.03.2026"
+            date_matches = list(re.finditer(
+                r"(?:Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag),\s*(\d{2})\.(\d{2})\.(\d{4})",
+                text
+            ))
+
+            if not date_matches:
+                continue
+
+            # Finde das passende Datum für diesen Link (basierend auf Position im Text)
+            link_text_pos = text.find(title)
+            best_match = None
+            for m in date_matches:
+                if m.start() < link_text_pos:
+                    best_match = m
+
+            if not best_match:
+                best_match = date_matches[0]
+
+            day = int(best_match.group(1))
+            month = int(best_match.group(2))
+            year = int(best_match.group(3))
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Zeit (suche nach dem Datum)
+            date_end = best_match.end()
+            remaining_text = text[date_end:date_end+100]
+            time_match = re.search(r"(\d{1,2}):(\d{2})", remaining_text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"regenbogenfabrik-{href}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, text)
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": href,
+                "source": "regenbogenfabrik",
+            })
+        except Exception:
+            continue
+
+    print(f"[Regenbogenfabrik] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lettrétage Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_lettretage() -> list[dict]:
+    """Scraped Events von lettretage.de."""
+    events = []
+    venue_name = "Lettrétage"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Veteranenstraße 21, 10119 Berlin",
+        bezirk="mitte",
+        url="https://www.lettretage.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.lettretage.de/programm/aktuelles-programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Lettretage] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for item in soup.select("li.event"):
+        try:
+            text = item.get_text(" ", strip=True)
+
+            # Datum (Format: "Mo. 02 März 2026")
+            date_match = re.search(r"(\d{1,2})\s+(\w+)\s+(\d{4})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month_name = date_match.group(2).lower()
+            year = int(date_match.group(3))
+
+            month = GERMAN_MONTHS.get(month_name)
+            if not month:
+                continue
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Titel: Text nach Datum bis zur Uhrzeit
+            title_match = re.search(r"\d{4}\s+(.+?)\s+\d{1,2}:\d{2}", text)
+            if title_match:
+                title = title_match.group(1).strip()
+            else:
+                continue
+
+            if not title or len(title) < 3:
+                continue
+
+            # Zeit
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            # Beschreibung
+            description = ""
+            desc_match = re.search(r"Eintritt.*?€\s+(.+?)$", text)
+            if desc_match:
+                description = desc_match.group(1)[:150]
+
+            event_id = hashlib.md5(f"lettretage-{event_date.isoformat()}-{title}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": "lesung",
+                "description": description,
+                "link": "https://www.lettretage.de/programm/aktuelles-programm/",
+                "source": "lettretage",
+            })
+        except Exception:
+            continue
+
+    print(f"[Lettretage] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Brotfabrik Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_brotfabrik() -> list[dict]:
+    """Scraped Events von brotfabrik-berlin.de."""
+    events = []
+    venue_name = "Brotfabrik"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Caligariplatz 1, 13086 Berlin",
+        bezirk="weissensee",
+        url="https://brotfabrik-berlin.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://brotfabrik-berlin.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Brotfabrik] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for article in soup.select("article, .event-item, .programm-item"):
+        try:
+            title_elem = article.select_one("h2 a, h3 a, .title a")
+            if not title_elem:
+                continue
+
+            title = title_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            href = title_elem.get("href", "")
+            event_link = href if href.startswith("http") else f"https://brotfabrik-berlin.de{href}"
+
+            text = article.get_text(" ", strip=True)
+
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3)) if date_match.group(3) else current_year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"brotfabrik-{event_link}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, text)
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "weissensee",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "brotfabrik",
+            })
+        except Exception:
+            continue
+
+    print(f"[Brotfabrik] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mehringhof Theater Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_mehringhof() -> list[dict]:
+    """Scraped Events von mehringhoftheater.de."""
+    events = []
+    venue_name = "Mehringhof Theater"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Gneisenaustraße 2a, 10961 Berlin",
+        bezirk="kreuzberg",
+        url="https://www.mehringhoftheater.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.mehringhoftheater.de/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Mehringhof] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for article in soup.select("article, .event, .programm-eintrag"):
+        try:
+            title_elem = article.select_one("h2 a, h3 a, a.title")
+            if not title_elem:
+                continue
+
+            title = title_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            href = title_elem.get("href", "")
+            event_link = href if href.startswith("http") else f"https://www.mehringhoftheater.de{href}"
+
+            text = article.get_text(" ", strip=True)
+
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3)) if date_match.group(3) else current_year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"mehringhof-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "kreuzberg",
+                "type": "theater",
+                "description": "",
+                "link": event_link,
+                "source": "mehringhof",
+            })
+        except Exception:
+            continue
+
+    print(f"[Mehringhof] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SO36 Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_so36() -> list[dict]:
+    """Scraped Events von so36.com."""
+    events = []
+    venue_name = "SO36"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Oranienstraße 190, 10999 Berlin",
+        bezirk="kreuzberg",
+        url="https://www.so36.com",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.so36.com/tickets",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[SO36] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for item in soup.select("article, .event, .ticket-item, li"):
+        try:
+            link_elem = item.select_one("a[href]")
+            if not link_elem:
+                continue
+
+            href = link_elem.get("href", "")
+            if not href:
+                continue
+
+            title = link_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            event_link = href if href.startswith("http") else f"https://www.so36.com{href}"
+
+            text = item.get_text(" ", strip=True)
+
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3)) if date_match.group(3) else current_year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"so36-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, text)
+            if event_type == "sonstiges":
+                event_type = "konzert"
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "so36",
+            })
+        except Exception:
+            continue
+
+    print(f"[SO36] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1004,6 +1663,27 @@ def refresh_cache():
 
     # Silent Green
     all_events.extend(scrape_silentgreen())
+
+    # Cinema Surreal
+    all_events.extend(scrape_cinema_surreal())
+
+    # Acud Macht Neu
+    all_events.extend(scrape_acud())
+
+    # Regenbogenfabrik
+    all_events.extend(scrape_regenbogenfabrik())
+
+    # Lettrétage
+    all_events.extend(scrape_lettretage())
+
+    # Brotfabrik
+    all_events.extend(scrape_brotfabrik())
+
+    # Mehringhof Theater
+    all_events.extend(scrape_mehringhof())
+
+    # SO36
+    all_events.extend(scrape_so36())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
