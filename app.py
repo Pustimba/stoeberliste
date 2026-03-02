@@ -1637,6 +1637,491 @@ def scrape_so36() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Urania Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_urania() -> list[dict]:
+    """Scraped Events von urania.de."""
+    events = []
+    venue_name = "Urania Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="An der Urania 17, 10787 Berlin",
+        bezirk="schoeneberg",
+        url="https://www.urania.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.urania.de/kalender/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Urania] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    seen_links = set()
+
+    for link in soup.select("a[href*='urania.de/event/']"):
+        try:
+            href = link.get("href", "")
+            if not href or href in seen_links or "reservix" in href:
+                continue
+            seen_links.add(href)
+
+            # Titel aus Link-Text
+            title = link.get_text(" ", strip=True)
+            # Entferne "mehr Info" und ähnliches
+            title = re.sub(r"\s*mehr\s*Info\s*$", "", title).strip()
+            if not title or len(title) < 5:
+                continue
+
+            event_link = href
+
+            # Finde Parent mit Datum und Zeit
+            parent = link
+            event_date = None
+            time_str = ""
+
+            for _ in range(10):
+                parent = parent.find_parent()
+                if not parent:
+                    break
+
+                text = parent.get_text(" ", strip=True)
+
+                # Zeit (Format: "16:00 Uhr")
+                if not time_str:
+                    time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", text)
+                    if time_match:
+                        time_str = f"{time_match.group(1)}:{time_match.group(2)}"
+
+                # Datum (Format: "08 So" = Tag 8, Sonntag)
+                date_match = re.search(r"(\d{2})\s*(Mo|Di|Mi|Do|Fr|Sa|So)", text)
+                if date_match and not event_date:
+                    day = int(date_match.group(1))
+                    # Monat aus aktuellem Monat ableiten (Urania zeigt ~4 Wochen)
+                    month = current_month
+                    year = current_year
+
+                    # Wenn Tag < aktueller Tag, nächster Monat
+                    if day < datetime.now().day - 7:
+                        month += 1
+                        if month > 12:
+                            month = 1
+                            year += 1
+
+                    try:
+                        event_date = datetime(year, month, day)
+                    except ValueError:
+                        pass
+                    break
+
+            if not event_date:
+                continue
+
+            event_id = hashlib.md5(f"urania-{event_link}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, "")
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "schoeneberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "urania",
+            })
+        except Exception:
+            continue
+
+    print(f"[Urania] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Babylon Berlin Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_babylon() -> list[dict]:
+    """Scraped Events von babylonberlin.eu (Stummfilme mit Orchester)."""
+    events = []
+    venue_name = "Babylon Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Rosa-Luxemburg-Straße 30, 10178 Berlin",
+        bezirk="mitte",
+        url="https://babylonberlin.eu",
+    )
+
+    try:
+        resp = requests.get(
+            "https://babylonberlin.eu/orchester",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Babylon] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for item in soup.select(".mix, article, .event-item"):
+        try:
+            link_elem = item.select_one("a[href*='/film/'], a[href*='/programm/']")
+            if not link_elem:
+                continue
+
+            href = link_elem.get("href", "")
+            event_link = f"https://babylonberlin.eu{href}" if href.startswith("/") else href
+
+            # Titel
+            title_elem = item.select_one("h3, h2, .title")
+            title = title_elem.get_text(strip=True) if title_elem else link_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            text = item.get_text(" ", strip=True)
+
+            # Datum (Format: "Mo, 02.03. 17:00")
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.\s*(\d{1,2}):(\d{2})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            hour = int(date_match.group(3))
+            minute = int(date_match.group(4))
+
+            year = current_year
+            current_month = datetime.now().month
+            if month < current_month and (current_month - month) > 2:
+                year += 1
+
+            try:
+                event_date = datetime(year, month, day, hour, minute)
+            except ValueError:
+                continue
+
+            time_str = f"{hour:02d}:{minute:02d}"
+
+            event_id = hashlib.md5(f"babylon-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": "film",
+                "description": "Stummfilm mit Live-Orchester",
+                "link": event_link,
+                "source": "babylon",
+            })
+        except Exception:
+            continue
+
+    print(f"[Babylon] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Literaturhaus Berlin Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_literaturhaus() -> list[dict]:
+    """Scraped Events von li-be.de (Literaturhaus Berlin)."""
+    events = []
+    venue_name = "Literaturhaus Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Fasanenstraße 23, 10719 Berlin",
+        bezirk="charlottenburg",
+        url="https://li-be.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://li-be.de/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Literaturhaus] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for link in soup.select("a[href*='li-be.de']"):
+        try:
+            href = link.get("href", "")
+            if not href or "/programm/" not in href or href.endswith("/programm/"):
+                continue
+
+            # Nur Event-Links
+            title_elem = link.select_one("h3, h2")
+            if not title_elem:
+                continue
+
+            title = title_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            event_link = href if href.startswith("http") else f"https://li-be.de{href}"
+
+            # Datum aus Parent
+            parent = link.find_parent("div") or link.find_parent("article")
+            if not parent:
+                continue
+
+            text = parent.get_text(" ", strip=True)
+
+            # Datum (Format: "3.3.Di" = 3. März, Dienstag)
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(Mo|Di|Mi|Do|Fr|Sa|So)", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = current_year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Zeit
+            time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"literaturhaus-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "charlottenburg",
+                "type": "lesung",
+                "description": "",
+                "link": event_link,
+                "source": "literaturhaus",
+            })
+        except Exception:
+            continue
+
+    print(f"[Literaturhaus] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Friedrich-Ebert-Stiftung Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_fes() -> list[dict]:
+    """Scraped Events von fes.de."""
+    events = []
+    venue_name = "Friedrich-Ebert-Stiftung"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Hiroshimastraße 17, 10785 Berlin",
+        bezirk="mitte",
+        url="https://www.fes.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.fes.de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[FES] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for article in soup.select("article, .event, .veranstaltung"):
+        try:
+            link_elem = article.select_one("a[href]")
+            if not link_elem:
+                continue
+
+            href = link_elem.get("href", "")
+            event_link = f"https://www.fes.de{href}" if href.startswith("/") else href
+
+            title_elem = article.select_one("h2, h3, .title")
+            title = title_elem.get_text(strip=True) if title_elem else ""
+            if not title or len(title) < 5:
+                continue
+
+            text = article.get_text(" ", strip=True)
+
+            # Datum
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3)) if date_match.group(3) else current_year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            # Nur Berlin-Events
+            if "berlin" not in text.lower() and "online" not in text.lower():
+                continue
+
+            event_id = hashlib.md5(f"fes-{event_link}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, text)
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "fes",
+            })
+        except Exception:
+            continue
+
+    print(f"[FES] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Panke Culture Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_panke() -> list[dict]:
+    """Scraped Events von pankeculture.com."""
+    events = []
+    venue_name = "Panke"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Gerichtstraße 23, 13347 Berlin",
+        bezirk="wedding",
+        url="https://www.pankeculture.com",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.pankeculture.com/programme/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Panke] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    current_year = datetime.now().year
+
+    for item in soup.select("article, .event, .programme-item, div[class*='event']"):
+        try:
+            link_elem = item.select_one("a[href]")
+            if not link_elem:
+                continue
+
+            href = link_elem.get("href", "")
+            event_link = href if href.startswith("http") else f"https://www.pankeculture.com{href}"
+
+            title_elem = item.select_one("h2, h3, .title")
+            title = title_elem.get_text(strip=True) if title_elem else link_elem.get_text(strip=True)
+            if not title or len(title) < 3:
+                continue
+
+            text = item.get_text(" ", strip=True)
+
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
+            if not date_match:
+                # Alternative: "March 5" oder "5 March"
+                alt_match = re.search(r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)", text, re.I)
+                if alt_match:
+                    day = int(alt_match.group(1))
+                    month_names = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+                                   "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12}
+                    month = month_names.get(alt_match.group(2).lower(), 0)
+                    if month:
+                        year = current_year
+                        try:
+                            event_date = datetime(year, month, day)
+                        except ValueError:
+                            continue
+                    else:
+                        continue
+                else:
+                    continue
+            else:
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3)) if date_match.group(3) else current_year
+                try:
+                    event_date = datetime(year, month, day)
+                except ValueError:
+                    continue
+
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+
+            event_id = hashlib.md5(f"panke-{event_link}".encode()).hexdigest()[:12]
+            event_type = _classify_event_type(title, text)
+            if event_type == "sonstiges":
+                event_type = "konzert"
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "wedding",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "panke",
+            })
+        except Exception:
+            continue
+
+    print(f"[Panke] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1684,6 +2169,21 @@ def refresh_cache():
 
     # SO36
     all_events.extend(scrape_so36())
+
+    # Urania
+    all_events.extend(scrape_urania())
+
+    # Babylon Berlin
+    all_events.extend(scrape_babylon())
+
+    # Literaturhaus Berlin
+    all_events.extend(scrape_literaturhaus())
+
+    # Friedrich-Ebert-Stiftung
+    all_events.extend(scrape_fes())
+
+    # Panke
+    all_events.extend(scrape_panke())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
