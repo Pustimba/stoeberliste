@@ -7,9 +7,10 @@
    ========================================================================= */
 :root {
   --white:      #ffffff;
-  --orange:     #f07c00;
-  --bg-main:    #262626;
-  --bg-panel:   #333;
+  --accent:     #7b2cbf;
+  --accent-dark: #5a1f8c;
+  --bg-main:    #1a1a2e;
+  --bg-panel:   #16213e;
   --text-light: #f4f4f4;
   --text-mid:   #bbb;
   --text-dark:  #888;
@@ -114,7 +115,7 @@ header {
    3. Navigation (Desktop)
    ========================================================================= */
 nav {
-  background-color: var(--orange);
+  background-color: var(--accent);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -193,7 +194,7 @@ nav ul.navbar li a:hover {
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
-  background-color: var(--orange);
+  background-color: var(--accent);
   min-width: 180px;
   max-height: 80vh;
   overflow-y: auto;
@@ -230,7 +231,7 @@ nav ul.navbar li a:hover {
 }
 
 .dropdown-content li a:hover {
-  background-color: #d45500;
+  background-color: var(--accent-dark);
 }
 
 /* Such-Icon Desktop */
@@ -401,6 +402,16 @@ nav ul.navbar li a:hover {
 /* =========================================================================
    6. Mobile Menu
    ========================================================================= */
+/* Desktop: hide mobile menu completely */
+@media (min-width: 769px) {
+  .mobile-menu {
+    display: none !important;
+  }
+  #search-flyout {
+    display: none !important;
+  }
+}
+
 @media (max-width: 768px) {
   .mobile-menu {
     position: fixed;
@@ -565,7 +576,7 @@ nav ul.navbar li a:hover {
   .search-form-inline .search-submit-btn {
     flex-shrink: 0;
     align-self: stretch;
-    background: var(--orange) !important;
+    background: var(--accent) !important;
     border: none !important;
     padding: 0 1rem;
     cursor: pointer;
@@ -577,7 +588,7 @@ nav ul.navbar li a:hover {
   }
 
   .search-form-inline .search-submit-btn:hover {
-    background: #d66a00 !important;
+    background: var(--accent-dark) !important;
   }
 
   .search-form-inline .search-submit-btn svg {
@@ -798,7 +809,7 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 0.3em;
-  background: var(--orange);
+  background: var(--accent);
   color: white;
   padding: 0.2em 0.6em;
   border-radius: 4px;
@@ -904,7 +915,7 @@ h2 {
 }
 
 .day-section h2 {
-  color: var(--orange);
+  color: var(--accent);
   margin-bottom: 1rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -929,7 +940,7 @@ h2 {
 }
 
 .search-form button {
-  background: var(--orange);
+  background: var(--accent);
   color: white;
   border: none;
   padding: 0.7rem 1.5rem;
@@ -941,7 +952,7 @@ h2 {
 }
 
 .search-form button:hover {
-  background: #d66a00;
+  background: var(--accent-dark);
 }
 
 .result-count {
