@@ -289,8 +289,54 @@ def _classify_event_type(title: str, description: str = "") -> str:
 
 
 def scrape_stressfaktor() -> list[dict]:
-    """Scraped Events von stressfaktor.squat.net."""
+    """Scraped Events von stressfaktor.squat.net.
+
+    Nur Events von ausgewählten Venues werden übernommen.
+    Stressfaktor aggregiert Events ohne Originallinks, daher wird
+    auf die Stressfaktor-Seite verlinkt.
+    """
     events = []
+
+    # Nur diese Venues von Stressfaktor scrapen (lowercase für Vergleich)
+    # Venues mit eigenem Scraper (wie Baiz) werden hier ausgeschlossen
+    ALLOWED_VENUES = {
+        "schokoladen": {
+            "name": "Schokoladen",
+            "adresse": "Ackerstraße 169, 10115 Berlin",
+            "bezirk": "mitte",
+            "url": "https://schokoladen-mitte.de",
+        },
+        "kubiz": {
+            "name": "KuBiZ",
+            "adresse": "Bernkasteler Straße 78, 13088 Berlin",
+            "bezirk": "weissensee",
+            "url": "https://kubiz-wallenberg.de",
+        },
+        "k19": {
+            "name": "K19",
+            "adresse": "Kreutzigerstraße 19, 10247 Berlin",
+            "bezirk": "friedrichshain",
+            "url": None,
+        },
+        "køpi": {
+            "name": "Køpi",
+            "adresse": "Köpenicker Straße 137, 10179 Berlin",
+            "bezirk": "kreuzberg",
+            "url": "https://koepi137.net",
+        },
+        "zielona góra": {
+            "name": "Zielona Góra",
+            "adresse": "Grünberger Straße 73, 10245 Berlin",
+            "bezirk": "friedrichshain",
+            "url": "https://zielona-gora.de",
+        },
+        "supamolly": {
+            "name": "SupaMolly",
+            "adresse": "Jessnerstraße 41, 10247 Berlin",
+            "bezirk": "friedrichshain",
+            "url": "https://supamolly.de",
+        },
+    }
 
     try:
         resp = requests.get(
@@ -324,6 +370,17 @@ def scrape_stressfaktor() -> list[dict]:
         if not current_date:
             continue
 
+        # Ort zuerst prüfen (Filter!)
+        venue_elem = elem.select_one(".views-field-nothing a")
+        venue_name = venue_elem.get_text(strip=True) if venue_elem else "Unbekannt"
+        venue_key = venue_name.lower()
+
+        # Nur erlaubte Venues
+        if venue_key not in ALLOWED_VENUES:
+            continue
+
+        venue_info = ALLOWED_VENUES[venue_key]
+
         # Titel
         title_elem = elem.select_one(".views-field-title h4 a")
         if not title_elem:
@@ -352,34 +409,16 @@ def scrape_stressfaktor() -> list[dict]:
                 except Exception:
                     pass
 
-        # Ort
-        venue_elem = elem.select_one(".views-field-nothing a")
-        venue_name = venue_elem.get_text(strip=True) if venue_elem else "Unbekannt"
-
-        # Adresse
-        adresse_elem = elem.select_one(".location .address")
-        adresse = ""
-        if adresse_elem:
-            # Extrahiere Adresse aus den span-Elementen
-            parts = []
-            street = adresse_elem.select_one(".address-line1")
-            if street:
-                parts.append(street.get_text(strip=True))
-            plz = adresse_elem.select_one(".postal-code")
-            city = adresse_elem.select_one(".locality")
-            if plz and city:
-                parts.append(f"{plz.get_text(strip=True)} {city.get_text(strip=True)}")
-            adresse = ", ".join(parts)
-
         # Beschreibung
         desc_elem = elem.select_one(".views-field-body")
         description = desc_elem.get_text(strip=True) if desc_elem else ""
 
-        # Venue registrieren/holen
+        # Venue registrieren mit korrekten Infos
         venue_slug = get_or_create_venue(
-            name=venue_name,
-            adresse=adresse,
-            url=f"https://stressfaktor.squat.net{venue_elem.get('href', '')}" if venue_elem else None,
+            name=venue_info["name"],
+            adresse=venue_info["adresse"],
+            bezirk=venue_info["bezirk"],
+            url=venue_info["url"],
         )
 
         # Event-Typ klassifizieren
@@ -388,25 +427,21 @@ def scrape_stressfaktor() -> list[dict]:
         # Event-ID generieren
         event_id = hashlib.md5(f"{link}{current_date.isoformat()}".encode()).hexdigest()[:12]
 
-        # Bezirk vom Venue holen
-        all_venues = get_all_venues()
-        bezirk = all_venues.get(venue_slug, {}).get("bezirk", "diverse")
-
         events.append({
             "id": event_id,
             "title": title,
             "date": current_date,
             "time": time_str,
             "venue_slug": venue_slug,
-            "venue_name": venue_name,
-            "bezirk": bezirk,
+            "venue_name": venue_info["name"],
+            "bezirk": venue_info["bezirk"],
             "type": event_type,
             "description": description,
             "link": link,
             "source": "stressfaktor",
         })
 
-    print(f"[Stressfaktor] {len(events)} Events geladen, {len(_DYNAMIC_VENUES)} Venues")
+    print(f"[Stressfaktor] {len(events)} Events geladen (gefiltert)")
     return events
 
 
