@@ -7,6 +7,7 @@ import os
 import re
 import hashlib
 import unicodedata
+from html import unescape
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_session import Session
@@ -1558,7 +1559,11 @@ def scrape_mehringhof() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scrape_so36() -> list[dict]:
-    """Scraped Events von so36.com."""
+    """Scraped Special-Events von so36.com.
+
+    Nur "Specials" wie Lesungen, Diskussionen, Filmabende, politische Events -
+    keine normalen Konzerte und Partys (SO36 hat sehr viele davon).
+    """
     events = []
     venue_name = "SO36"
     venue_slug = get_or_create_venue(
@@ -1567,6 +1572,14 @@ def scrape_so36() -> list[dict]:
         bezirk="kreuzberg",
         url="https://www.so36.com",
     )
+
+    # Keywords für Special-Events (keine normalen Konzerte/Partys)
+    SPECIAL_KEYWORDS = [
+        "lesung", "diskussion", "vortrag", "talk", "film", "kino", "screening",
+        "theater", "performance", "kabarett", "comedy", "slam", "quiz",
+        "workshop", "ausstellung", "vernissage", "festival", "gala",
+        "politik", "demo", "kundgebung", "soli", "benefiz",
+    ]
 
     try:
         resp = requests.get(
@@ -1599,6 +1612,12 @@ def scrape_so36() -> list[dict]:
             event_link = href if href.startswith("http") else f"https://www.so36.com{href}"
 
             text = item.get_text(" ", strip=True)
+            search_text = (title + " " + text).lower()
+
+            # Nur Special-Events
+            is_special = any(kw in search_text for kw in SPECIAL_KEYWORDS)
+            if not is_special:
+                continue
 
             date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
             if not date_match:
@@ -1618,8 +1637,6 @@ def scrape_so36() -> list[dict]:
 
             event_id = hashlib.md5(f"so36-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
             event_type = _classify_event_type(title, text)
-            if event_type == "sonstiges":
-                event_type = "konzert"
 
             events.append({
                 "id": event_id,
@@ -1637,7 +1654,7 @@ def scrape_so36() -> list[dict]:
         except Exception:
             continue
 
-    print(f"[SO36] {len(events)} Events geladen")
+    print(f"[SO36] {len(events)} Special-Events geladen")
     return events
 
 
@@ -2407,7 +2424,10 @@ def scrape_lichtblick() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scrape_festsaal() -> list[dict]:
-    """Scraped Events von Festsaal Kreuzberg via API."""
+    """Scraped Special-Events von Festsaal Kreuzberg via API.
+
+    Nur "Specials" wie Wrestling, Comedy, Shows - keine normalen Konzerte.
+    """
     events = []
     venue_name = "Festsaal Kreuzberg"
     venue_slug = get_or_create_venue(
@@ -2416,6 +2436,14 @@ def scrape_festsaal() -> list[dict]:
         bezirk="kreuzberg",
         url="https://festsaal-kreuzberg.de",
     )
+
+    # Keywords für Special-Events (keine normalen Konzerte)
+    SPECIAL_KEYWORDS = [
+        "wrestling", "comedy", "lesung", "talk", "kabarett", "theater",
+        "performance", "vortrag", "diskussion", "slam", "quiz", "stand-up",
+        "standup", "show", "gala", "preisverleihung", "festival", "messe",
+        "convention", "con ", "fair", "markt",
+    ]
 
     try:
         resp = requests.get(
@@ -2440,6 +2468,15 @@ def scrape_festsaal() -> list[dict]:
         try:
             title = item.get("title", "")
             if not title:
+                continue
+
+            # Prüfe ob es ein Special ist
+            sub_title = item.get("sub_title") or ""
+            preview_text = item.get("preview_text") or ""
+            search_text = (title + " " + sub_title + " " + preview_text).lower()
+
+            is_special = any(kw in search_text for kw in SPECIAL_KEYWORDS)
+            if not is_special:
                 continue
 
             # Datum
@@ -2476,28 +2513,62 @@ def scrape_festsaal() -> list[dict]:
             url_path = item.get("url", "")
             event_link = f"https://festsaal-kreuzberg.de{url_path}" if url_path else "https://festsaal-kreuzberg.de"
 
-            # Beschreibung
-            description = item.get("preview_text", "") or ""
+            # Beschreibung aus layouts extrahieren falls preview_text leer
+            description = preview_text
+            if not description:
+                layouts = item.get("layouts", [])
+                for layout in layouts:
+                    if layout.get("type") == "layout_simple":
+                        for layout_item in layout.get("value", {}).get("items", []):
+                            if layout_item.get("type") == "item_text":
+                                html_text = layout_item.get("value", {}).get("text", "")
+                                # HTML-Tags entfernen
+                                text = re.sub(r"<[^>]+>", " ", html_text)
+                                text = re.sub(r"\s+", " ", text).strip()
+                                if text and len(text) > 50:
+                                    description = text[:300]
+                                    break
+                    if description:
+                        break
+
+            # Titel mit Untertitel kombinieren falls vorhanden
+            full_title = title
+            if sub_title and sub_title.lower() not in title.lower():
+                full_title = f"{title} - {sub_title}"
+
+            # Event-Typ bestimmen
+            event_type = "sonstiges"
+            if "wrestling" in search_text:
+                event_type = "theater"
+            elif any(w in search_text for w in ["comedy", "kabarett", "stand-up", "standup"]):
+                event_type = "theater"
+            elif any(w in search_text for w in ["lesung", "vortrag", "diskussion", "talk"]):
+                event_type = "diskussion"
+            elif "quiz" in search_text or "slam" in search_text:
+                event_type = "sonstiges"
 
             event_id = hashlib.md5(f"festsaal-{item.get('id', '')}".encode()).hexdigest()[:12]
 
+            # HTML-Entities dekodieren
+            clean_description = unescape(description[:300]) if description else ""
+
             events.append({
                 "id": event_id,
-                "title": title,
+                "title": full_title,
                 "date": event_date,
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
                 "bezirk": "kreuzberg",
-                "type": "konzert",
-                "description": description[:300] if description else "",
+                "type": event_type,
+                "description": clean_description,
                 "link": event_link,
                 "source": "festsaal",
             })
         except Exception:
             continue
 
-    print(f"[Festsaal] {len(events)} Events geladen")
+    print(f"[Festsaal] {len(events)} Special-Events geladen")
     return events
 
 
