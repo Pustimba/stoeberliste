@@ -17,7 +17,7 @@
         <p class="event-meta">
             <span class="event-time-badge">{{ event.time or '—' }}</span>
             {% if show_venue %}
-            <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_name }}</a>
+            <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_address if event.venue_address else event.venue_name }}</a>
             {% endif %}
             {% if event.type %}
             <span class="event-type-badge">{{ event_types.get(event.type, event.type) }}</span>

@@ -444,16 +444,82 @@ def scrape_stressfaktor() -> list[dict]:
 # Rosa Luxemburg Stiftung Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_rosalux_venue(event_url: str) -> tuple[str, str, str]:
+    """Holt Veranstaltungsort und Adresse von RosaLux Event-Detailseite.
+
+    Nutzt Schema.org Markup (itemprop) für zuverlässige Extraktion.
+    Returns: (venue_name, address, bezirk)
+    """
+    try:
+        resp = requests.get(
+            event_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Nutze Schema.org Markup
+        venue_name = ""
+        street = ""
+        plz = ""
+        city = ""
+
+        # Venue-Name aus itemprop="name" innerhalb itemprop="location"
+        location_elem = soup.select_one('[itemprop="location"]')
+        if location_elem:
+            name_elem = location_elem.select_one('[itemprop="name"]')
+            if name_elem:
+                venue_name = name_elem.get_text(strip=True)
+
+            # Adresse aus itemprop="address"
+            address_elem = location_elem.select_one('[itemprop="address"]')
+            if address_elem:
+                street_elem = address_elem.select_one('[itemprop="streetAddress"]')
+                plz_elem = address_elem.select_one('[itemprop="postalCode"]')
+                city_elem = address_elem.select_one('[itemprop="addressLocality"]')
+
+                if street_elem:
+                    street = street_elem.get_text(strip=True)
+                if plz_elem:
+                    plz = plz_elem.get_text(strip=True)
+                if city_elem:
+                    city = city_elem.get_text(strip=True)
+
+        if venue_name and street and plz:
+            address = f"{street}, {plz} {city}".strip()
+            bezirk = _bezirk_from_plz(address)
+            return (venue_name, address, bezirk)
+
+        # Fallback: Alte Methode mit dt/dd
+        for dt in soup.select("dt"):
+            if "veranstaltungsort" in dt.get_text(strip=True).lower():
+                dd = dt.find_next_sibling("dd")
+                if dd:
+                    raw_text = dd.get_text(" ", strip=True)
+                    raw_text = re.split(r"Informationen|Weitere|Derzeit", raw_text)[0].strip()
+
+                    plz_match = re.search(r"(\d{5})\s*Berlin", raw_text)
+                    if plz_match:
+                        bezirk = _bezirk_from_plz(raw_text)
+                        return (raw_text[:60], raw_text, bezirk)
+
+    except Exception:
+        pass
+
+    return ("", "", "")
+
+
 def scrape_rosalux() -> list[dict]:
-    """Scraped Events von rosalux.de/veranstaltungen - nur Berlin Events."""
+    """Scraped Events von rosalux.de/veranstaltungen - nur Berlin Events.
+
+    Lädt für jedes Event die Detailseite um den genauen Veranstaltungsort zu bekommen.
+    """
     events = []
-    venue_name = "Rosa-Luxemburg-Stiftung"
-    venue_slug = get_or_create_venue(
-        name=venue_name,
-        adresse="Franz-Mehring-Platz 1, 10243 Berlin",
-        bezirk="friedrichshain",
-        url="https://www.rosalux.de",
-    )
+
+    # Default-Venue für Fallback
+    default_venue_name = "Rosa-Luxemburg-Stiftung"
+    default_address = "Franz-Mehring-Platz 1, 10243 Berlin"
 
     try:
         resp = requests.get(
@@ -553,6 +619,29 @@ def scrape_rosalux() -> list[dict]:
                 elif "lesung" in meta_text:
                     event_type = "lesung"
 
+            # Veranstaltungsort von Detailseite holen
+            venue_name, address, bezirk = _fetch_rosalux_venue(event_link)
+
+            # Fallback auf Default
+            if not venue_name:
+                venue_name = default_venue_name
+                address = default_address
+                bezirk = "friedrichshain"
+
+            # Online-Events markieren
+            if location == "online":
+                venue_name = f"{venue_name} (Online)" if venue_name else "Online"
+                address = "Online"
+                bezirk = "diverse"
+
+            # Venue registrieren
+            venue_slug = get_or_create_venue(
+                name=venue_name,
+                adresse=address,
+                bezirk=bezirk,
+                url="https://www.rosalux.de",
+            )
+
             event_id = hashlib.md5(f"rosalux-{event_link}".encode()).hexdigest()[:12]
 
             events.append({
@@ -562,7 +651,8 @@ def scrape_rosalux() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
-                "bezirk": "friedrichshain",
+                "venue_address": address,
+                "bezirk": bezirk,
                 "type": event_type,
                 "description": description,
                 "link": event_link,
