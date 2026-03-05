@@ -253,6 +253,32 @@ GERMAN_MONTHS = {
     "september": 9, "oktober": 10, "november": 11, "dezember": 12,
 }
 
+GERMAN_MONTHS_DISPLAY = {
+    1: "Januar", 2: "Februar", 3: "März", 4: "April",
+    5: "Mai", 6: "Juni", 7: "Juli", 8: "August",
+    9: "September", 10: "Oktober", 11: "November", 12: "Dezember",
+}
+
+GERMAN_WEEKDAYS = {
+    0: "Montag", 1: "Dienstag", 2: "Mittwoch", 3: "Donnerstag",
+    4: "Freitag", 5: "Samstag", 6: "Sonntag",
+}
+
+
+@app.template_filter('german_date')
+def german_date_filter(dt, fmt='full'):
+    """Format datetime in German. fmt: 'full' = 'Montag, 05. März 2026', 'short' = '05. März 2026'"""
+    if not dt:
+        return ""
+    day = dt.day
+    month = GERMAN_MONTHS_DISPLAY.get(dt.month, "")
+    year = dt.year
+    weekday = GERMAN_WEEKDAYS.get(dt.weekday(), "")
+
+    if fmt == 'short':
+        return f"{day:02d}. {month} {year}"
+    return f"{weekday}, {day:02d}. {month} {year}"
+
 
 def _parse_german_date(text: str) -> datetime | None:
     """Parst deutsches Datum wie 'So., 1. März 2026'."""

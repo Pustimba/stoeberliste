@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}{{ datum.strftime('%d. %B %Y') }} - Kleine Terminliste{% endblock %}
+{% block title %}{{ datum|german_date('short') }} - Kleine Terminliste{% endblock %}
 
 {% block content %}
-<h1>{{ datum.strftime('%A, %d. %B %Y') }}</h1>
+<h1>{{ datum|german_date }}</h1>
 
 <div class="event-list">
     {% if events %}

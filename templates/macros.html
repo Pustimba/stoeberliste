@@ -4,7 +4,7 @@
 {% if event.date.date() != current_date.value %}
     {% set current_date.value = event.date.date() %}
     <div class="date-separator">
-        <span class="date-separator-text">{{ event.date.strftime('%A, %d. %B %Y') }}</span>
+        <span class="date-separator-text">{{ event.date|german_date }}</span>
     </div>
 {% endif %}
 <article class="event-card">
