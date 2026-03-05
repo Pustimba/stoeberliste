@@ -197,11 +197,12 @@ nav ul.navbar li a:hover,
 
 .dropdown-content li a {
   display: block;
-  padding: var(--spacing-xs) var(--spacing-sm);
+  padding: 0.75rem 1rem;
   color: #ffffff;
   font-size: 0.85rem;
   text-transform: none;
   border-bottom: 1px solid rgba(255,255,255,0.1);
+  line-height: 1.4;
 }
 
 .dropdown-content li:last-child a {
