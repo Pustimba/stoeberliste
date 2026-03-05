@@ -2502,6 +2502,239 @@ def scrape_festsaal() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Schwarze Risse Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_schwarze_risse() -> list[dict]:
+    """Scraped Events vom Buchladen Schwarze Risse."""
+    events = []
+    venue_name = "Schwarze Risse"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Gneisenaustr. 2a, 10961 Berlin",
+        bezirk="kreuzberg",
+        url="https://schwarzerisse.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://schwarzerisse.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[SchwRisse] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    today = datetime.now().date()
+
+    # Finde alle panel-grids mit Datum (h4 mit DD.MM.YYYY Format) und Titel (h3.widget-title)
+    # Stoppe bei "Vergangene Veranstaltungen"
+    found_vergangene = False
+
+    for panel_grid in soup.find_all("div", class_="panel-grid"):
+        # Prüfen ob wir bei "Vergangene Veranstaltungen" angelangt sind
+        h1_check = panel_grid.find("h1")
+        if h1_check and "vergangene" in h1_check.get_text(strip=True).lower():
+            found_vergangene = True
+
+        # Überspringe alles nach "Vergangene"
+        if found_vergangene:
+            continue
+
+        # Datum/Zeit extrahieren (Format: "03.03.2026 // 20:00 Uhr")
+        date_h4 = panel_grid.find("h4")
+        if not date_h4:
+            continue
+
+        date_text = date_h4.get_text(strip=True)
+        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", date_text)
+        time_match = re.search(r"(\d{1,2}):(\d{2})", date_text)
+
+        if not date_match:
+            continue
+
+        day = int(date_match.group(1))
+        month = int(date_match.group(2))
+        year = int(date_match.group(3))
+
+        try:
+            event_date = datetime(year, month, day)
+        except ValueError:
+            continue
+
+        # Nur zukünftige Events
+        if event_date.date() < today:
+            continue
+
+        time_str = ""
+        if time_match:
+            h, m = int(time_match.group(1)), int(time_match.group(2))
+            time_str = f"{h:02d}:{m:02d}"
+            event_date = event_date.replace(hour=h, minute=m)
+
+        # Titel aus widget-title h3 extrahieren
+        title_elem = panel_grid.find("h3", class_="widget-title")
+        if not title_elem:
+            continue
+
+        title = title_elem.get_text(strip=True)
+        if not title or len(title) < 5:
+            continue
+
+        # Beschreibung aus textwidget (das zweite textwidget, nicht das mit dem Datum)
+        description = ""
+        textwidgets = panel_grid.find_all("div", class_="textwidget")
+        for tw in textwidgets:
+            for p in tw.find_all("p"):
+                p_text = p.get_text(strip=True)
+                # Überspringe kurze Texte und Adress-Infos
+                if p_text and len(p_text) > 50 and "Gneisenau" not in p_text and "Mehringdamm" not in p_text:
+                    description = p_text[:400]
+                    break
+            if description:
+                break
+
+        event_id = hashlib.md5(f"schwarzerisse-{event_date.isoformat()}-{title[:30]}".encode()).hexdigest()[:12]
+
+        events.append({
+            "id": event_id,
+            "title": title,
+            "date": event_date,
+            "time": time_str,
+            "venue_slug": venue_slug,
+            "venue_name": venue_name,
+            "bezirk": "kreuzberg",
+            "type": "lesung",
+            "description": description,
+            "link": "https://schwarzerisse.de/",
+            "source": "schwarzerisse",
+        })
+
+    print(f"[SchwRisse] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Buchladen Weltkugel Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_weltkugel() -> list[dict]:
+    """Scraped Events vom Buchladen zur schwankenden Weltkugel."""
+    events = []
+    venue_name = "Zur schwankenden Weltkugel"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Prenzlauer Allee 27, 10405 Berlin",
+        bezirk="prenzlauer-berg",
+        url="https://www.buchladen-weltkugel.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.buchladen-weltkugel.de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Weltkugel] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    today = datetime.now().date()
+
+    # Suche nach Event-Einträgen (Drupal-basierte Seite)
+    # Format typischerweise: Veranstaltungstitel mit Datum
+    for event_item in soup.select(".views-row, .event-item, article.event"):
+        try:
+            # Titel
+            title_elem = event_item.select_one("h2, h3, .event-title, .views-field-title a")
+            if not title_elem:
+                continue
+
+            title = title_elem.get_text(strip=True)
+            if not title:
+                continue
+
+            # Datum suchen
+            date_elem = event_item.select_one(".date, .event-date, time, .views-field-field-date")
+            if not date_elem:
+                continue
+
+            date_text = date_elem.get_text(strip=True)
+
+            # Versuche verschiedene Datumsformate
+            event_date = None
+
+            # Format: DD.MM.YYYY
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", date_text)
+            if date_match:
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+                try:
+                    event_date = datetime(year, month, day)
+                except ValueError:
+                    pass
+
+            # Falls kein Datum gefunden, überspringen
+            if not event_date:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < today:
+                continue
+
+            # Zeit extrahieren
+            time_str = ""
+            time_match = re.search(r"(\d{1,2}):(\d{2})", date_text)
+            if time_match:
+                h, m = int(time_match.group(1)), int(time_match.group(2))
+                time_str = f"{h:02d}:{m:02d}"
+                event_date = event_date.replace(hour=h, minute=m)
+
+            # Link
+            link_elem = event_item.select_one("a[href]")
+            link = "https://www.buchladen-weltkugel.de/veranstaltungen"
+            if link_elem and link_elem.get("href"):
+                href = link_elem.get("href")
+                if href.startswith("/"):
+                    link = f"https://www.buchladen-weltkugel.de{href}"
+                elif href.startswith("http"):
+                    link = href
+
+            # Beschreibung
+            desc_elem = event_item.select_one(".description, .event-description, .views-field-body")
+            description = ""
+            if desc_elem:
+                description = desc_elem.get_text(strip=True)[:400]
+
+            event_id = hashlib.md5(f"weltkugel-{event_date.isoformat()}-{title[:30]}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "prenzlauer-berg",
+                "type": "lesung",
+                "description": description,
+                "link": link,
+                "source": "weltkugel",
+            })
+        except Exception:
+            continue
+
+    print(f"[Weltkugel] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2569,6 +2802,12 @@ def refresh_cache():
 
     # Festsaal Kreuzberg
     all_events.extend(scrape_festsaal())
+
+    # Schwarze Risse (Buchladen)
+    all_events.extend(scrape_schwarze_risse())
+
+    # Buchladen Weltkugel
+    all_events.extend(scrape_weltkugel())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
