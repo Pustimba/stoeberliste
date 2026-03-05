@@ -17,10 +17,10 @@
         <p class="event-meta">
             <span class="event-time-badge">{{ event.time or '—' }}</span>
             {% if show_venue %}
-            <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_address if event.venue_address else event.venue_name }}</a>
+            <span class="event-venue-address">{{ event.venue_address if event.venue_address else event.venue_name }}</span>
             {% endif %}
             {% if event.type %}
-            <span class="event-type-badge">{{ event_types.get(event.type, event.type) }}</span>
+            <span class="event-type-badge">{{ event.type_display if event.type_display else event_types.get(event.type, event.type) }}</span>
             {% endif %}
         </p>
         <h2><a href="{{ event.link }}" target="_blank" rel="noopener">{{ event.title }}</a></h2>

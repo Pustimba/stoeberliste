@@ -444,12 +444,19 @@ def scrape_stressfaktor() -> list[dict]:
 # Rosa Luxemburg Stiftung Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_rosalux_venue(event_url: str) -> tuple[str, str, str]:
-    """Holt Veranstaltungsort und Adresse von RosaLux Event-Detailseite.
+def _fetch_rosalux_details(event_url: str) -> dict:
+    """Holt Veranstaltungsdetails von RosaLux Event-Detailseite.
 
     Nutzt Schema.org Markup (itemprop) für zuverlässige Extraktion.
-    Returns: (venue_name, address, bezirk)
+    Returns: dict mit venue_name, address, bezirk, event_type_original
     """
+    result = {
+        "venue_name": "",
+        "address": "",
+        "bezirk": "",
+        "event_type_original": "",
+    }
+
     try:
         resp = requests.get(
             event_url,
@@ -459,13 +466,20 @@ def _fetch_rosalux_venue(event_url: str) -> tuple[str, str, str]:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Nutze Schema.org Markup
+        # Event-Typ aus intro__meta (z.B. "Tagung/Konferenz")
+        intro_meta = soup.select_one(".intro__meta")
+        if intro_meta:
+            type_text = intro_meta.get_text(strip=True).rstrip(":")
+            if type_text:
+                result["event_type_original"] = type_text
+
+        # Nutze Schema.org Markup für Venue
         venue_name = ""
+        room_name = ""
         street = ""
         plz = ""
         city = ""
 
-        # Venue-Name aus itemprop="name" innerhalb itemprop="location"
         location_elem = soup.select_one('[itemprop="location"]')
         if location_elem:
             name_elem = location_elem.select_one('[itemprop="name"]')
@@ -480,16 +494,53 @@ def _fetch_rosalux_venue(event_url: str) -> tuple[str, str, str]:
                 city_elem = address_elem.select_one('[itemprop="addressLocality"]')
 
                 if street_elem:
-                    street = street_elem.get_text(strip=True)
+                    # streetAddress kann mehrere Zeilen enthalten (Raum + Straße)
+                    # getrennt durch <br/> Tags
+                    street_parts = []
+                    for content in street_elem.children:
+                        if hasattr(content, 'name') and content.name == 'br':
+                            continue
+                        text = content.get_text(strip=True) if hasattr(content, 'get_text') else str(content).strip()
+                        if text:
+                            street_parts.append(text)
+
+                    # Letzte Zeile mit Hausnummer ist die Straße
+                    # Vorherige Zeilen sind Raumname
+                    if street_parts:
+                        # Finde die Zeile mit Hausnummer (Straße)
+                        street_line = None
+                        room_lines = []
+                        for part in street_parts:
+                            # Hat Hausnummer? (Zahl am Ende oder "Platz/Str." + Zahl)
+                            if re.search(r'\d+[a-zA-Z]?\s*$', part) or re.search(r'(Platz|Straße|Str\.|Allee|Weg|Damm)\s*\d*\s*$', part, re.IGNORECASE):
+                                street_line = part
+                            else:
+                                room_lines.append(part)
+
+                        if street_line:
+                            street = street_line
+                            if room_lines:
+                                room_name = ", ".join(room_lines)
+                        else:
+                            # Fallback: Alles als Straße
+                            street = " ".join(street_parts)
+
                 if plz_elem:
                     plz = plz_elem.get_text(strip=True)
                 if city_elem:
                     city = city_elem.get_text(strip=True)
 
-        if venue_name and street and plz:
-            address = f"{street}, {plz} {city}".strip()
-            bezirk = _bezirk_from_plz(address)
-            return (venue_name, address, bezirk)
+        if street and plz:
+            # Kombiniere Venue-Name mit Raum falls vorhanden
+            if room_name:
+                full_venue = f"{venue_name}, {room_name}" if venue_name else room_name
+            else:
+                full_venue = venue_name
+
+            result["venue_name"] = full_venue
+            result["address"] = f"{street}, {plz} {city}".strip()
+            result["bezirk"] = _bezirk_from_plz(result["address"])
+            return result
 
         # Fallback: Alte Methode mit dt/dd
         for dt in soup.select("dt"):
@@ -501,13 +552,15 @@ def _fetch_rosalux_venue(event_url: str) -> tuple[str, str, str]:
 
                     plz_match = re.search(r"(\d{5})\s*Berlin", raw_text)
                     if plz_match:
-                        bezirk = _bezirk_from_plz(raw_text)
-                        return (raw_text[:60], raw_text, bezirk)
+                        result["venue_name"] = raw_text[:60]
+                        result["address"] = raw_text
+                        result["bezirk"] = _bezirk_from_plz(raw_text)
+                        return result
 
     except Exception:
         pass
 
-    return ("", "", "")
+    return result
 
 
 def scrape_rosalux() -> list[dict]:
@@ -603,30 +656,27 @@ def scrape_rosalux() -> list[dict]:
             if desc_elem:
                 description = desc_elem.get_text(strip=True)
 
-            # Event-Typ aus Kategorie
+            # Details von Detailseite holen (Venue, Adresse, Event-Typ)
+            details = _fetch_rosalux_details(event_link)
+
+            venue_name = details.get("venue_name") or default_venue_name
+            address = details.get("address") or default_address
+            bezirk = details.get("bezirk") or "friedrichshain"
+            event_type_original = details.get("event_type_original", "")
+
+            # Event-Typ für Filterung (Kategorie)
             event_type = "diskussion"
-            meta_elem = teaser.select_one(".teaser__meta-event-text")
-            if meta_elem:
-                meta_text = meta_elem.get_text(strip=True).lower()
-                if "film" in meta_text:
-                    event_type = "film"
-                elif "konzert" in meta_text or "musik" in meta_text:
-                    event_type = "konzert"
-                elif "ausstellung" in meta_text or "kultur" in meta_text:
-                    event_type = "ausstellung"
-                elif "workshop" in meta_text or "seminar" in meta_text:
-                    event_type = "workshop"
-                elif "lesung" in meta_text:
-                    event_type = "lesung"
-
-            # Veranstaltungsort von Detailseite holen
-            venue_name, address, bezirk = _fetch_rosalux_venue(event_link)
-
-            # Fallback auf Default
-            if not venue_name:
-                venue_name = default_venue_name
-                address = default_address
-                bezirk = "friedrichshain"
+            type_lower = event_type_original.lower()
+            if "film" in type_lower:
+                event_type = "film"
+            elif "konzert" in type_lower or "musik" in type_lower:
+                event_type = "konzert"
+            elif "ausstellung" in type_lower:
+                event_type = "ausstellung"
+            elif "workshop" in type_lower or "seminar" in type_lower:
+                event_type = "workshop"
+            elif "lesung" in type_lower:
+                event_type = "lesung"
 
             # Online-Events markieren
             if location == "online":
@@ -654,6 +704,7 @@ def scrape_rosalux() -> list[dict]:
                 "venue_address": address,
                 "bezirk": bezirk,
                 "type": event_type,
+                "type_display": event_type_original or "Diskussion & Vortrag",
                 "description": description,
                 "link": event_link,
                 "source": "rosalux",
