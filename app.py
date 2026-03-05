@@ -183,6 +183,21 @@ EVENT_TYPES = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Venue Logos (filename in static/img/logos/)
+# ─────────────────────────────────────────────────────────────────────────────
+
+VENUE_LOGOS = {
+    "hau-hebbel-am-ufer": "hau-hebbel-am-ufer.svg",
+}
+
+
+@app.context_processor
+def inject_venue_logos():
+    """Make VENUE_LOGOS available in all templates."""
+    return {"venue_logos": VENUE_LOGOS}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Zeitfenster für Suche
 # ─────────────────────────────────────────────────────────────────────────────
 

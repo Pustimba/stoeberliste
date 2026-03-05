@@ -3,14 +3,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <meta name="theme-color" content="#1a1a2e" />
+    <meta name="theme-color" content="#f5f0e8" />
     <title>{% block title %}Kleine Terminliste{% endblock %}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" media="print" onload="this.media='all'">
-    <noscript>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap">
-    </noscript>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
@@ -48,16 +42,6 @@
         {% endfor %}
       </ul>
     </li>
-    <li><a href="{{ url_for('merkliste') }}">Merkliste</a></li>
-    <li class="search-icon">
-      <button type="button" id="search-toggle" class="icon-button" aria-label="Suche einblenden">
-        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-      </button>
-    </li>
     <li class="hamburger-icon">
       <button type="button" id="hamburger-toggle" class="hamburger" aria-label="Menü öffnen">
         <span class="bar"></span><span class="bar"></span><span class="bar"></span>
@@ -65,21 +49,6 @@
     </li>
   </ul>
 </nav>
-
-<div class="desktop-search-wrapper" aria-hidden="true">
-  <div class="search-inner">
-    <form action="{{ url_for('suche') }}" method="get" class="search-form-inline">
-      <input type="text" name="q" placeholder="Suchen..." value="{{ request.args.get('q', '') }}">
-      <button type="submit" class="search-submit-btn" aria-label="Suche starten">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-      </button>
-    </form>
-  </div>
-</div>
 
 <main>
 {% block content %}{% endblock %}
@@ -123,18 +92,11 @@
         </ul>
       </div>
     </section>
-    <a class="acc-link" href="{{ url_for('merkliste') }}">Merkliste</a>
   </div>
 </nav>
 
-<div id="search-flyout" class="search-flyout" aria-hidden="true">
-  <form action="{{ url_for('suche') }}" method="get" class="search-flyout-form">
-    <input type="text" name="q" placeholder="Suchen…" value="{{ request.args.get('q', '') }}" autocomplete="on" />
-  </form>
-</div>
-
 <footer>
-  <p>© 2026 Kleine Terminliste</p>
+  <p>Kleine Terminliste Berlin</p>
 </footer>
 
 <script>
@@ -196,24 +158,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  /* ===== Such-Flyout ===== */
-  const searchToggle = document.getElementById('search-toggle');
-  const searchFlyout = document.getElementById('search-flyout');
-  const desktopSearch = document.querySelector('.desktop-search-wrapper');
-
-  searchToggle?.addEventListener('click', () => {
-    if (window.innerWidth >= 769 && desktopSearch) {
-      const isVisible = desktopSearch.getAttribute('aria-hidden') === 'false';
-      desktopSearch.setAttribute('aria-hidden', isVisible ? 'true' : 'false');
-      desktopSearch.classList.toggle('show', !isVisible);
-    } else if (searchFlyout) {
-      const isVisible = searchFlyout.getAttribute('aria-hidden') === 'false';
-      searchFlyout.setAttribute('aria-hidden', isVisible ? 'true' : 'false');
-      searchFlyout.classList.toggle('show', !isVisible);
-      if (!isVisible) searchFlyout.querySelector('input')?.focus();
-    }
-  });
-
   /* ===== Desktop Dropdowns ===== */
   const triggers = document.querySelectorAll('.dropdown > button.dropdown-toggle');
 
@@ -237,24 +181,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.dropdown')) closeAll();
-  });
-
-  /* ===== Merken Toggle ===== */
-  document.querySelectorAll(".merken-toggle").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const eventId = btn.dataset.eventId;
-      fetch("/toggle_merkliste", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "event_id=" + encodeURIComponent(eventId)
-      })
-      .then(res => res.json())
-      .then(data => {
-        document.querySelectorAll(`.merken-toggle[data-event-id="${eventId}"]`).forEach(b => {
-          b.classList.toggle("marked", data.added);
-        });
-      });
-    });
   });
 });
 </script>

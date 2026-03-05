@@ -16,7 +16,7 @@
 
 <div class="event-list">
     {% if events %}
-        {{ event_list_with_dates(events, event_types, show_venue=false) }}
+        {{ event_list_with_dates(events, event_types, show_venue=false, venue_logos=venue_logos) }}
     {% else %}
         <p class="no-events">Keine Veranstaltungen an diesem Ort.</p>
     {% endif %}

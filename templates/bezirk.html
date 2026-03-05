@@ -8,7 +8,7 @@
 
 <div class="event-list">
     {% if events %}
-        {{ event_list_with_dates(events, event_types) }}
+        {{ event_list_with_dates(events, event_types, venue_logos=venue_logos) }}
     {% else %}
         <p class="no-events">Keine Veranstaltungen in diesem Bezirk.</p>
     {% endif %}
