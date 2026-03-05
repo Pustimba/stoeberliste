@@ -720,9 +720,47 @@ def scrape_rosalux() -> list[dict]:
 # HAU Hebbel am Ufer Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_hau_description(url: str) -> str:
+    """Fetch description from HAU event detail page."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Description is in .realContent, first strong tag or first paragraph
+        real_content = soup.select_one(".realContent")
+        if real_content:
+            strong_elem = real_content.select_one("strong")
+            if strong_elem:
+                return strong_elem.get_text(strip=True)
+            # Fallback to first paragraph
+            p_elem = real_content.select_one("p")
+            if p_elem:
+                return p_elem.get_text(strip=True)
+    except Exception:
+        pass
+    return ""
+
+
 def scrape_hau() -> list[dict]:
     """Scraped Events von hebbel-am-ufer.de."""
     events = []
+
+    # HAU venue addresses
+    HAU_ADDRESSES = {
+        "HAU1": "Stresemannstraße 29, 10963 Berlin",
+        "HAU2": "Hallesches Ufer 34, 10963 Berlin",
+        "HAU3": "Tempelhofer Ufer 10, 10963 Berlin",
+        "WAU": "Hallesches Ufer 34, 10963 Berlin",
+        "HAU3 Houseclub": "Tempelhofer Ufer 10, 10963 Berlin",
+    }
+
+    # Categories to block
+    BLOCKED_CATEGORIES = {"tanz", "performance", "theater"}
 
     try:
         resp = requests.get(
@@ -737,17 +775,52 @@ def scrape_hau() -> list[dict]:
 
     soup = BeautifulSoup(resp.text, "html.parser")
     current_year = datetime.now().year
+    current_month = None
 
-    for item in soup.select("li"):
+    # Parse month headers and event items
+    for month_div in soup.select("div.month"):
+        # Extract month from header like "März 2026"
+        month_header = month_div.select_one("h3")
+        if month_header:
+            month_text = month_header.get_text(strip=True).lower()
+            for m_name, m_num in GERMAN_MONTHS.items():
+                if m_name in month_text:
+                    current_month = m_num
+                    break
+
+    # Process event items
+    for item in soup.select("div.item, li.item"):
         try:
-            # Titel aus h3 oder h4
-            title_elem = item.select_one("h3, h4")
-            if not title_elem:
+            # Titel aus h3 und h4 kombinieren
+            h3_elem = item.select_one("h3")
+            h4_elem = item.select_one("h4")
+            if not h3_elem and not h4_elem:
                 continue
 
-            title = title_elem.get_text(strip=True)
+            title_parts = []
+            if h3_elem:
+                title_parts.append(h3_elem.get_text(strip=True))
+            if h4_elem:
+                title_parts.append(h4_elem.get_text(strip=True))
+            title = " – ".join(title_parts) if len(title_parts) > 1 else title_parts[0]
+
             if not title or len(title) < 3:
                 continue
+
+            # Extract categories from li.cat elements
+            categories = []
+            for cat_elem in item.select("li.cat"):
+                cat_text = cat_elem.get_text(strip=True).lower()
+                categories.append(cat_text)
+
+            # Skip events with blocked categories
+            if any(cat in BLOCKED_CATEGORIES for cat in categories):
+                continue
+
+            # Use first category as type_display
+            type_display = ""
+            if categories:
+                type_display = item.select_one("li.cat").get_text(strip=True)
 
             # Link
             link_elem = item.select_one("a[href*='/programm/pdetail/']")
@@ -757,22 +830,48 @@ def scrape_hau() -> list[dict]:
             href = link_elem.get("href", "")
             event_link = f"https://www.hebbel-am-ufer.de{href}" if href.startswith("/") else href
 
-            # Datum aus strong-Tags (Format: "So 01" = Sonntag, 1.)
-            text = item.get_text(" ", strip=True)
+            # Extract venue from data-venue attribute
+            venue_elem = item.select_one("a[data-venue]")
+            hau_venue = venue_elem.get("data-venue", "HAU1") if venue_elem else "HAU1"
+            venue_address = HAU_ADDRESSES.get(hau_venue, HAU_ADDRESSES["HAU1"])
+            venue_name = f"HAU Hebbel am Ufer ({hau_venue})"
 
-            # Suche nach Datum-Pattern wie "So 01" oder "Mi 04"
-            date_match = re.search(r"(Mo|Di|Mi|Do|Fr|Sa|So)\s+(\d{1,2})", text)
-            if not date_match:
-                continue
+            # Get date from parent day element
+            day_parent = item.find_parent("li", class_="day")
+            if not day_parent:
+                # Try finding in sibling structure
+                day_parent = item.find_parent("div", class_="ul-style")
+                if day_parent:
+                    day_parent = day_parent.find_parent("li", class_="day")
 
-            day = int(date_match.group(2))
+            day = None
+            if day_parent:
+                date_header = day_parent.select_one("h2.big")
+                if date_header:
+                    date_text = date_header.get_text(strip=True)
+                    date_match = re.search(r"(\d{1,2})", date_text)
+                    if date_match:
+                        day = int(date_match.group(1))
 
-            # Monat aus Kontext ermitteln (März = 3)
-            month_match = re.search(r"(januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember)", text.lower())
-            if month_match:
-                month = GERMAN_MONTHS.get(month_match.group(1), datetime.now().month)
-            else:
-                month = datetime.now().month
+            if not day:
+                # Fallback: try to find date in item text
+                text = item.get_text(" ", strip=True)
+                date_match = re.search(r"(Mo|Di|Mi|Do|Fr|Sa|So)\s+(\d{1,2})", text)
+                if date_match:
+                    day = int(date_match.group(2))
+                else:
+                    continue
+
+            # Get month from data-filterDate attribute or use current
+            month = current_month or datetime.now().month
+            if day_parent and day_parent.get("data-filterDate"):
+                filter_date = day_parent.get("data-filterDate", "")
+                date_parts = filter_date.split("-")
+                if len(date_parts) == 2:
+                    try:
+                        month = int(date_parts[1])
+                    except ValueError:
+                        pass
 
             year = current_year
             if month < datetime.now().month:
@@ -783,20 +882,37 @@ def scrape_hau() -> list[dict]:
             except ValueError:
                 continue
 
-            # Zeit (Format: "17:00" oder "20:00")
-            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
-            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
+            # Zeit aus strong-Tag
+            time_elem = item.select_one("strong")
+            time_str = ""
+            if time_elem:
+                time_text = time_elem.get_text(strip=True)
+                time_match = re.search(r"(\d{1,2}):(\d{2})", time_text)
+                if time_match:
+                    time_str = f"{time_match.group(1)}:{time_match.group(2)}"
 
-            # Venue - immer HAU Hebbel am Ufer (nicht HAU1/2/3 unterscheiden)
-            venue_name = "HAU Hebbel am Ufer"
             venue_slug = get_or_create_venue(
-                name=venue_name,
-                adresse="Stresemannstraße 29, 10963 Berlin",
+                name="HAU Hebbel am Ufer",
+                adresse=venue_address,
                 bezirk="kreuzberg",
                 url="https://www.hebbel-am-ufer.de",
             )
 
-            event_id = hashlib.md5(f"hau-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+            event_id = hashlib.md5(f"hau-{event_link}-{event_date.isoformat()}-{time_str}".encode()).hexdigest()[:12]
+
+            # Determine internal type from categories
+            event_type = "theater"
+            if "musik" in categories:
+                event_type = "konzert"
+            elif "dialog" in categories:
+                event_type = "diskussion"
+            elif "film" in categories:
+                event_type = "film"
+            elif "ausstellung" in categories:
+                event_type = "ausstellung"
+
+            # Fetch description from detail page
+            description = _fetch_hau_description(event_link)
 
             events.append({
                 "id": event_id,
@@ -805,9 +921,11 @@ def scrape_hau() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "kreuzberg",
-                "type": "theater",
-                "description": "",
+                "type": event_type,
+                "type_display": type_display,
+                "description": description,
                 "link": event_link,
                 "source": "hau",
             })
