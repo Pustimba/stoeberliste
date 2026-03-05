@@ -1023,7 +1023,10 @@ def scrape_baiz() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scrape_silentgreen() -> list[dict]:
-    """Scraped Events von silent-green.net/programm."""
+    """Scraped Events von silent-green.net/programm.
+
+    Filtert normale Konzerte raus - nur Specials wie Film, Lesung, etc.
+    """
     events = []
     venue_name = "Silent Green Kulturquartier"
     venue_slug = get_or_create_venue(
@@ -1095,6 +1098,11 @@ def scrape_silentgreen() -> list[dict]:
 
             # Typ aus Kategorie (Konzert, Filmvorführung, Lesung)
             original_text = link.get_text(strip=True)
+
+            # Konzerte rausfiltern - nur Specials behalten
+            if original_text.lower().startswith("konzert"):
+                continue
+
             event_type = _classify_event_type(original_text, "")
 
             event_id = hashlib.md5(f"silentgreen-{event_link}".encode()).hexdigest()[:12]
