@@ -75,6 +75,8 @@ VERANSTALTER = {
     "lichtblick-kino": {"name": "Lichtblick Kino", "url": "https://lichtblick-kino.org"},
     "lettretage": {"name": "Lettrétage", "url": "https://lettretage.de"},
     "cinema-surreal": {"name": "Cinema Surreal", "url": "https://cinemasurreal.de"},
+    "peter-edel": {"name": "Peter Edel", "url": "https://www.peteredel.de"},
+    "kubiz-wallenberg": {"name": "KuBiZ Wallenberg", "url": "https://www.kubiz-wallenberg.de"},
 }
 
 
@@ -215,21 +217,26 @@ EVENT_TYPES = {
 # Venue Logos (filename in static/img/logos/)
 # ─────────────────────────────────────────────────────────────────────────────
 
-VENUE_LOGOS = {
-    "hau-hebbel-am-ufer": "hau-hebbel-am-ufer.svg",
-    "brotfabrik": "brotfabrik.svg",
-    "festsaal-kreuzberg": "festsaal-kreuzberg.svg",
-    "kino-central": "kino-central.svg",
-    "literaturforum-im-brecht-haus": "literaturforum-im-brecht-haus.svg",
-    "rosa-luxemburg-stiftung": "rosa-luxemburg-stiftung.svg",
-    "urania-berlin": "urania-berlin.svg",
-}
+def get_venue_logo(veranstalter_slug: str) -> str | None:
+    """Sucht automatisch nach Logo: static/img/logos/{slug}.svg"""
+    logo_path = os.path.join(app.static_folder, "img", "logos", f"{veranstalter_slug}.svg")
+    if os.path.exists(logo_path):
+        return f"{veranstalter_slug}.svg"
+    return None
 
 
 @app.context_processor
 def inject_venue_logos():
-    """Make VENUE_LOGOS available in all templates."""
-    return {"venue_logos": VENUE_LOGOS}
+    """Make venue_logos function available in all templates."""
+    # Scanne einmal alle verfügbaren Logos
+    logos_dir = os.path.join(app.static_folder, "img", "logos")
+    venue_logos = {}
+    if os.path.exists(logos_dir):
+        for filename in os.listdir(logos_dir):
+            if filename.endswith(".svg"):
+                slug = filename[:-4]  # Remove .svg
+                venue_logos[slug] = filename
+    return {"venue_logos": venue_logos}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,6 +293,8 @@ VERANSTALTER_SOURCE_MAP = {
     "lichtblick-kino": "lichtblick",
     "lettretage": "lettretage",
     "cinema-surreal": "cinemasurreal",
+    "peter-edel": "peteredel",
+    "kubiz-wallenberg": "kubiz",
 }
 
 
@@ -3221,6 +3230,256 @@ def scrape_weltkugel() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Peter Edel Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_peteredel() -> list[dict]:
+    """Scraped Events von peteredel.de.
+
+    Filtert reine Party-Events raus, behält kulturelle Veranstaltungen.
+    """
+    events = []
+    venue_name = "Peter Edel"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Berliner Allee 256, 13088 Berlin",
+        bezirk="weissensee",
+        url="https://www.peteredel.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.peteredel.de/events/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[PeterEdel] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    today = datetime.now().date()
+    current_year = datetime.now().year
+
+    current_date = None
+
+    # Alle h3-Elemente durchgehen
+    for h3 in soup.find_all("h3"):
+        text = h3.get_text(strip=True)
+
+        # Datum erkennen (z.B. "FR | 06.03.")
+        date_match = re.search(r"(MO|DI|MI|DO|FR|SA|SO)\s*\|\s*(\d{1,2})\.(\d{1,2})\.", text.upper())
+        if date_match:
+            day = int(date_match.group(2))
+            month = int(date_match.group(3))
+            try:
+                year = current_year
+                if month < datetime.now().month:
+                    year += 1
+                current_date = datetime(year, month, day)
+            except ValueError:
+                current_date = None
+            continue
+
+        # Event-Titel mit Link erkennen
+        link_elem = h3.select_one("a")
+        if link_elem and current_date:
+            title_elem = link_elem.select_one("strong") or link_elem
+            title = title_elem.get_text(strip=True)
+            # Zeilenumbrüche entfernen
+            title = re.sub(r"\s+", " ", title).strip()
+
+            if not title or len(title) < 3:
+                continue
+
+            href = link_elem.get("href", "")
+            if not href:
+                continue
+
+            event_link = f"https://www.peteredel.de{href}" if href.startswith("/") else href
+
+            # Beschreibung aus nachfolgendem p-Tag
+            description = ""
+            next_elem = h3.find_next_sibling()
+            while next_elem and next_elem.name == "p":
+                p_text = next_elem.get_text(strip=True)
+                # Filtere Ticket-Infos und kurze Texte raus
+                if p_text and len(p_text) > 50 and not p_text.startswith("Tickets"):
+                    if "Einlass" not in p_text[:30] and "Euro" not in p_text[:30]:
+                        description = p_text[:400]
+                        break
+                next_elem = next_elem.find_next_sibling()
+
+            # Event-Typ klassifizieren
+            event_type = _classify_event_type(title, description)
+
+            event_id = hashlib.md5(f"peteredel-{current_date.isoformat()}-{title[:30]}".encode()).hexdigest()[:12]
+
+            # Nur zukünftige Events
+            if current_date.date() >= today:
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": current_date,
+                    "time": "",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "bezirk": "weissensee",
+                    "type": event_type,
+                    "description": description,
+                    "link": event_link,
+                    "source": "peteredel",
+                })
+
+    print(f"[PeterEdel] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KuBiZ Wallenberg Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_kubiz() -> list[dict]:
+    """Scraped Events von kubiz-wallenberg.de.
+
+    Blockiert Jazz-Events.
+    """
+    events = []
+    venue_name = "KuBiZ Wallenberg"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Bernkasteler Straße 78, 13088 Berlin",
+        bezirk="weissensee",
+        url="https://www.kubiz-wallenberg.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.kubiz-wallenberg.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[KuBiZ] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    today = datetime.now().date()
+
+    for article in soup.select("article.post"):
+        try:
+            # Titel aus h2.entry-title
+            title_elem = article.select_one("h2.entry-title a")
+            if not title_elem:
+                continue
+
+            raw_title = title_elem.get_text(strip=True)
+            if not raw_title or len(raw_title) < 3:
+                continue
+
+            # Jazz-Events blockieren (im Titel oder in Tags)
+            classes = article.get("class", [])
+            class_str = " ".join(classes)
+            if "tag-jazz" in class_str or "jazz" in raw_title.lower():
+                continue
+
+            event_link = title_elem.get("href", "")
+
+            # Datum aus dem Titel extrahieren (z.B. "7.3.26 Jazzkonzert: ...")
+            # Format: D.M.YY oder DD.MM.YY
+            date_match = re.match(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})\s*(.+)", raw_title)
+            if date_match:
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+                if year < 100:
+                    year += 2000
+                title = date_match.group(4).strip()
+                # Entferne führendes "Konzert:" etc.
+                title = re.sub(r"^(Konzert|Film|Lesung|Workshop)[:\s]*", "", title, flags=re.IGNORECASE).strip()
+            else:
+                title = raw_title
+                # Fallback: Datum aus time-Element
+                time_elem = article.select_one("time.entry-date")
+                if not time_elem:
+                    continue
+                datetime_attr = time_elem.get("datetime", "")
+                if not datetime_attr:
+                    continue
+                try:
+                    parsed_dt = datetime.fromisoformat(datetime_attr.replace("Z", "+00:00"))
+                    day, month, year = parsed_dt.day, parsed_dt.month, parsed_dt.year
+                except ValueError:
+                    continue
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < today:
+                continue
+
+            # Zeit aus h4 oder h2 (z.B. "20 Uhr, Aula")
+            time_str = ""
+            for heading in article.select("h4.wp-block-heading, h2.wp-block-heading"):
+                time_text = heading.get_text(strip=True)
+                time_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*Uhr", time_text)
+                if time_match:
+                    h = int(time_match.group(1))
+                    m = int(time_match.group(2)) if time_match.group(2) else 0
+                    time_str = f"{h:02d}:{m:02d}"
+                    break
+
+            # Beschreibung aus dem Artikel-Content
+            description = ""
+            content_div = article.select_one(".entry-content")
+            if content_div:
+                for p in content_div.select("p"):
+                    p_text = p.get_text(strip=True)
+                    # Überspringe Zeit/Ort/Eintritt-Infos und kurze Texte
+                    if p_text and len(p_text) > 50:
+                        if not re.match(r"^\d+\s*Uhr", p_text) and "Eintritt" not in p_text[:20]:
+                            description = p_text[:400]
+                            break
+
+            # Typ aus Tags
+            event_type = "sonstiges"
+            if "tag-film" in class_str or "tag-kino" in class_str:
+                event_type = "film"
+            elif "tag-konzert" in class_str:
+                event_type = "konzert"
+            elif "tag-lesung" in class_str:
+                event_type = "lesung"
+            elif "tag-workshop" in class_str:
+                event_type = "workshop"
+
+            event_id = hashlib.md5(f"kubiz-{event_date.isoformat()}-{title[:30]}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "weissensee",
+                "type": event_type,
+                "description": description,
+                "link": event_link,
+                "source": "kubiz",
+            })
+        except Exception:
+            continue
+
+    print(f"[KuBiZ] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3294,6 +3553,12 @@ def refresh_cache():
 
     # Buchladen Weltkugel
     all_events.extend(scrape_weltkugel())
+
+    # Peter Edel
+    all_events.extend(scrape_peteredel())
+
+    # KuBiZ Wallenberg
+    all_events.extend(scrape_kubiz())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
