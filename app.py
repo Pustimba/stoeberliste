@@ -2685,7 +2685,13 @@ def scrape_panke() -> list[dict]:
                 continue
 
             href = link_elem.get("href", "")
-            event_link = href if href.startswith("http") else f"https://www.pankeculture.com{href}"
+            # Vermeide Instagram-Links - nutze stattdessen Panke-Programmseite
+            if "instagram" in href.lower():
+                event_link = "https://www.pankeculture.com/programme/"
+            elif href.startswith("http"):
+                event_link = href
+            else:
+                event_link = f"https://www.pankeculture.com{href}"
 
             title_elem = item.select_one("h2, h3, .title")
             title = title_elem.get_text(strip=True) if title_elem else link_elem.get_text(strip=True)
