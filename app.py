@@ -1246,6 +1246,40 @@ def scrape_baiz() -> list[dict]:
 # Silent Green Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_silentgreen_details(url: str) -> dict:
+    """Fetch details from Silent Green event detail page."""
+    result = {"title": "", "description": "", "type_display": ""}
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Spitzmarke from h1 with itemprop="headline"
+        h1 = soup.select_one("h1[itemprop='headline']")
+        if h1:
+            result["type_display"] = h1.get_text(strip=True)
+
+        # Full title from h2 in ce-bodytext
+        bodytext = soup.select_one(".ce-bodytext")
+        if bodytext:
+            h2 = bodytext.select_one("h2")
+            if h2:
+                result["title"] = h2.get_text(strip=True)
+
+            # Description from first p tag after h2
+            p = bodytext.select_one("p")
+            if p:
+                result["description"] = p.get_text(strip=True)
+
+    except Exception:
+        pass
+    return result
+
+
 def scrape_silentgreen() -> list[dict]:
     """Scraped Events von silent-green.net/programm.
 
@@ -1282,15 +1316,10 @@ def scrape_silentgreen() -> list[dict]:
                 continue
             seen_links.add(href)
 
-            # Titel aus Link-Text
-            title = link.get_text(strip=True)
-            if not title or len(title) < 3:
+            # Titel aus Link-Text (vorläufig)
+            link_title = link.get_text(strip=True)
+            if not link_title or len(link_title) < 3:
                 continue
-
-            # Entferne Kategorieprefix (Konzert, Filmvorführung, etc.)
-            clean_title = re.sub(r"^(Konzert|Filmvorführung|Festival|Lesung|Installation|Performance|Ausstellung)", "", title).strip()
-            if clean_title:
-                title = clean_title
 
             event_link = f"https://www.silent-green.net{href}" if href.startswith("/") else href
 
@@ -1320,14 +1349,26 @@ def scrape_silentgreen() -> list[dict]:
                 if time_match:
                     time_str = f"{time_match.group(1)}:{time_match.group(2)}"
 
-            # Typ aus Kategorie (Konzert, Filmvorführung, Lesung)
-            original_text = link.get_text(strip=True)
-
             # Konzerte rausfiltern - nur Specials behalten
-            if original_text.lower().startswith("konzert"):
+            if link_title.lower().startswith("konzert"):
                 continue
 
-            event_type = _classify_event_type(original_text, "")
+            # Fetch details from detail page
+            details = _fetch_silentgreen_details(event_link)
+
+            # Use detail page title if available, otherwise clean link title
+            if details["title"]:
+                title = details["title"]
+            else:
+                # Entferne Kategorieprefix aus Link-Titel
+                title = re.sub(r"^(Konzert|Filmvorführung|Festival|Lesung|Installation|Performance|Ausstellung)\s*", "", link_title).strip()
+                if not title:
+                    title = link_title
+            description = details["description"]
+            type_display = details["type_display"]
+
+            # Classify event type
+            event_type = _classify_event_type(type_display or link_title, description)
 
             event_id = hashlib.md5(f"silentgreen-{event_link}".encode()).hexdigest()[:12]
 
@@ -1340,7 +1381,8 @@ def scrape_silentgreen() -> list[dict]:
                 "venue_name": venue_name,
                 "bezirk": "wedding",
                 "type": event_type,
-                "description": "",
+                "type_display": type_display,
+                "description": description,
                 "link": event_link,
                 "source": "silentgreen",
             })
