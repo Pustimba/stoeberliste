@@ -1107,9 +1107,10 @@ def scrape_lfbrecht() -> list[dict]:
     """Scraped Events von lfbrecht.de/events/."""
     events = []
     venue_name = "Literaturforum im Brecht-Haus"
+    venue_address = "Chausseestraße 125, 10115 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
-        adresse="Chausseestraße 125, 10115 Berlin",
+        adresse=venue_address,
         bezirk="mitte",
         url="https://lfbrecht.de",
     )
@@ -1196,6 +1197,7 @@ def scrape_lfbrecht() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": event_type,
                 "description": description,
@@ -1217,9 +1219,10 @@ def scrape_baiz() -> list[dict]:
     """Scraped Events von baiz.info/programm/."""
     events = []
     venue_name = "Baiz"
+    venue_address = "Schönhauser Allee 26a, 10435 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
-        adresse="Schönhauser Allee 26a, 10435 Berlin",
+        adresse=venue_address,
         bezirk="prenzlauer-berg",
         url="https://www.baiz.info",
     )
@@ -1286,6 +1289,7 @@ def scrape_baiz() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "prenzlauer-berg",
                 "type": event_type,
                 "description": description,
@@ -1348,6 +1352,7 @@ def scrape_silentgreen() -> list[dict]:
     """
     events = []
     venue_name = "Silent Green Kulturquartier"
+    venue_address = "Gerichtstraße 35, 13347 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Gerichtstraße 35, 13347 Berlin",
@@ -1441,6 +1446,7 @@ def scrape_silentgreen() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "wedding",
                 "type": event_type,
                 "type_display": type_display,
@@ -1464,6 +1470,7 @@ def scrape_cinema_surreal() -> list[dict]:
     """Scraped Events von smb.museum Cinema Surreal Filmreihe."""
     events = []
     venue_name = "Sammlung Scharf-Gerstenberg"
+    venue_address = "Schloßstraße 70, 14059 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Schloßstraße 70, 14059 Berlin",
@@ -1527,6 +1534,7 @@ def scrape_cinema_surreal() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "charlottenburg",
                 "type": "film",
                 "description": "Cinema Surreal Filmreihe",
@@ -1548,6 +1556,7 @@ def scrape_acud() -> list[dict]:
     """Scraped Events von acudmachtneu.de."""
     events = []
     venue_name = "Acud Macht Neu"
+    venue_address = "Veteranenstraße 21, 10119 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Veteranenstraße 21, 10119 Berlin",
@@ -1636,6 +1645,7 @@ def scrape_acud() -> list[dict]:
                 "time": "",
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": event_type,
                 "description": "",
@@ -1657,6 +1667,7 @@ def scrape_regenbogenfabrik() -> list[dict]:
     """Scraped Events von regenbogenfabrik.de."""
     events = []
     venue_name = "Regenbogenfabrik"
+    venue_address = "Lausitzer Straße 22, 10999 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Lausitzer Straße 22, 10999 Berlin",
@@ -1761,6 +1772,7 @@ def scrape_regenbogenfabrik() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": event_type,
                 "description": "",
@@ -1782,6 +1794,7 @@ def scrape_lettretage() -> list[dict]:
     """Scraped Events von lettretage.de."""
     events = []
     venue_name = "Lettrétage"
+    venue_address = "Veteranenstraße 21, 10119 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Veteranenstraße 21, 10119 Berlin",
@@ -1854,6 +1867,7 @@ def scrape_lettretage() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": "lesung",
                 "description": description,
@@ -1871,13 +1885,55 @@ def scrape_lettretage() -> list[dict]:
 # Brotfabrik Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_brotfabrik_details(url: str) -> dict:
+    """Fetch description and category from Brotfabrik event detail page."""
+    result = {"description": "", "category": "", "is_free": False}
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Kategorie aus URL oder Menü erkennen
+        if "/kino/" in url or "brot-menu-kino" in resp.text:
+            result["category"] = "film"
+
+        # Beschreibung aus p-Tags im Content-Bereich
+        # Suche nach dem längsten zusammenhängenden Text
+        paragraphs = soup.select("p")
+        best_desc = ""
+        for p in paragraphs:
+            text = p.get_text(strip=True)
+            # Ignoriere kurze Texte, Datums-/Zeitangaben, Footer-Texte
+            if len(text) > 80 and not text.startswith("©") and "Kontakt" not in text[:20]:
+                if "eingesperrt" in text or "Jahre" in text or len(text) > len(best_desc):
+                    # Bevorzuge inhaltliche Beschreibungen
+                    if not re.match(r"^\d+\.\d+\.\s*\|", text):  # Keine Datumszeilen
+                        best_desc = text
+                        break
+
+        result["description"] = best_desc[:500] if best_desc else ""
+
+        # Check for free event
+        page_text = soup.get_text(" ", strip=True)
+        result["is_free"] = _detect_free_event(page_text)
+
+    except Exception:
+        pass
+    return result
+
+
 def scrape_brotfabrik() -> list[dict]:
     """Scraped Events von brotfabrik-berlin.de."""
     events = []
     venue_name = "Brotfabrik"
+    venue_address = "Caligariplatz 1, 13086 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
-        adresse="Caligariplatz 1, 13086 Berlin",
+        adresse=venue_address,
         bezirk="weissensee",
         url="https://brotfabrik-berlin.de",
     )
@@ -1927,8 +1983,15 @@ def scrape_brotfabrik() -> list[dict]:
             time_match = re.search(r"(\d{1,2}):(\d{2})", text)
             time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
 
+            # Fetch details from event page
+            details = _fetch_brotfabrik_details(event_link)
+            description = details.get("description", "")
+            is_free = details.get("is_free", False)
+
+            # Event-Typ: Nutze Kategorie von Detailseite oder klassifiziere
+            event_type = details.get("category") or _classify_event_type(title, text + " " + description)
+
             event_id = hashlib.md5(f"brotfabrik-{event_link}".encode()).hexdigest()[:12]
-            event_type = _classify_event_type(title, text)
 
             events.append({
                 "id": event_id,
@@ -1937,11 +2000,13 @@ def scrape_brotfabrik() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "weissensee",
                 "type": event_type,
-                "description": "",
+                "description": description,
                 "link": event_link,
                 "source": "brotfabrik",
+                "is_free": is_free,
             })
         except Exception:
             continue
@@ -1958,6 +2023,7 @@ def scrape_mehringhof() -> list[dict]:
     """Scraped Events von mehringhoftheater.de."""
     events = []
     venue_name = "Mehringhof Theater"
+    venue_address = "Gneisenaustraße 2a, 10961 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Gneisenaustraße 2a, 10961 Berlin",
@@ -2019,6 +2085,7 @@ def scrape_mehringhof() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": "theater",
                 "description": "",
@@ -2044,6 +2111,7 @@ def scrape_so36() -> list[dict]:
     """
     events = []
     venue_name = "SO36"
+    venue_address = "Oranienstraße 190, 10999 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Oranienstraße 190, 10999 Berlin",
@@ -2123,6 +2191,7 @@ def scrape_so36() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": event_type,
                 "description": "",
@@ -2175,6 +2244,7 @@ def scrape_urania() -> list[dict]:
     """Scraped Events von urania.de."""
     events = []
     venue_name = "Urania Berlin"
+    venue_address = "An der Urania 17, 10787 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="An der Urania 17, 10787 Berlin",
@@ -2273,6 +2343,7 @@ def scrape_urania() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "schoeneberg",
                 "type": event_type,
                 "description": description,
@@ -2295,6 +2366,7 @@ def scrape_babylon() -> list[dict]:
     """Scraped Events von babylonberlin.eu (Stummfilme mit Orchester)."""
     events = []
     venue_name = "Babylon Berlin"
+    venue_address = "Rosa-Luxemburg-Straße 30, 10178 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Rosa-Luxemburg-Straße 30, 10178 Berlin",
@@ -2364,6 +2436,7 @@ def scrape_babylon() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": "film",
                 "description": "Stummfilm mit Live-Orchester",
@@ -2385,6 +2458,7 @@ def scrape_literaturhaus() -> list[dict]:
     """Scraped Events von li-be.de (Literaturhaus Berlin)."""
     events = []
     venue_name = "Literaturhaus Berlin"
+    venue_address = "Fasanenstraße 23, 10719 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Fasanenstraße 23, 10719 Berlin",
@@ -2469,6 +2543,7 @@ def scrape_literaturhaus() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "charlottenburg",
                 "type": "lesung",
                 "description": "",
@@ -2490,6 +2565,7 @@ def scrape_fes() -> list[dict]:
     """Scraped Events von fes.de."""
     events = []
     venue_name = "Friedrich-Ebert-Stiftung"
+    venue_address = "Hiroshimastraße 17, 10785 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Hiroshimastraße 17, 10785 Berlin",
@@ -2558,6 +2634,7 @@ def scrape_fes() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": event_type,
                 "description": "",
@@ -2579,6 +2656,7 @@ def scrape_panke() -> list[dict]:
     """Scraped Events von pankeculture.com."""
     events = []
     venue_name = "Panke"
+    venue_address = "Gerichtstraße 23, 13347 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Gerichtstraße 23, 13347 Berlin",
@@ -2659,6 +2737,7 @@ def scrape_panke() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "wedding",
                 "type": event_type,
                 "description": "",
@@ -2680,6 +2759,7 @@ def scrape_kino_central() -> list[dict]:
     """Scraped nur Special Events von Kino Central (Stummfilm, Livemusik, Previews, Gäste)."""
     events = []
     venue_name = "Kino Central"
+    venue_address = "Rosenthaler Straße 39, 10178 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Rosenthaler Straße 39, 10178 Berlin",
@@ -2774,6 +2854,7 @@ def scrape_kino_central() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": "film",
                 "description": "",
@@ -2802,6 +2883,7 @@ def scrape_lichtblick() -> list[dict]:
     """Scraped nur Specials und Filmreihen von Lichtblick Kino."""
     events = []
     venue_name = "Lichtblick Kino"
+    venue_address = "Kastanienallee 77, 10435 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Kastanienallee 77, 10435 Berlin",
@@ -2923,6 +3005,7 @@ def scrape_lichtblick() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "prenzlauer-berg",
                 "type": "film",
                 "description": description,
@@ -2947,6 +3030,7 @@ def scrape_festsaal() -> list[dict]:
     """
     events = []
     venue_name = "Festsaal Kreuzberg"
+    venue_address = "Skalitzer Straße 130, 10999 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Skalitzer Straße 130, 10999 Berlin",
@@ -3076,6 +3160,7 @@ def scrape_festsaal() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": event_type,
                 "description": clean_description,
@@ -3097,6 +3182,7 @@ def scrape_schwarze_risse() -> list[dict]:
     """Scraped Events vom Buchladen Schwarze Risse."""
     events = []
     venue_name = "Schwarze Risse"
+    venue_address = "Gneisenaustr. 2a, 10961 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Gneisenaustr. 2a, 10961 Berlin",
@@ -3194,6 +3280,7 @@ def scrape_schwarze_risse() -> list[dict]:
             "time": time_str,
             "venue_slug": venue_slug,
             "venue_name": venue_name,
+            "venue_address": venue_address,
             "bezirk": "kreuzberg",
             "type": "lesung",
             "description": description,
@@ -3213,6 +3300,7 @@ def scrape_weltkugel() -> list[dict]:
     """Scraped Events vom Buchladen zur schwankenden Weltkugel."""
     events = []
     venue_name = "Zur schwankenden Weltkugel"
+    venue_address = "Prenzlauer Allee 27, 10405 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Prenzlauer Allee 27, 10405 Berlin",
@@ -3309,6 +3397,7 @@ def scrape_weltkugel() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "prenzlauer-berg",
                 "type": "lesung",
                 "description": description,
@@ -3334,6 +3423,7 @@ def scrape_peteredel() -> list[dict]:
     """
     events = []
     venue_name = "Peter Edel"
+    venue_address = "Berliner Allee 256, 13088 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Berliner Allee 256, 13088 Berlin",
@@ -3440,6 +3530,7 @@ def scrape_peteredel() -> list[dict]:
                     "time": "",
                     "venue_slug": venue_slug,
                     "venue_name": venue_name,
+                    "venue_address": venue_address,
                     "bezirk": "weissensee",
                     "type": event_type,
                     "description": description,
@@ -3462,6 +3553,7 @@ def scrape_kubiz() -> list[dict]:
     """
     events = []
     venue_name = "KuBiZ Wallenberg"
+    venue_address = "Bernkasteler Straße 78, 13088 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse="Bernkasteler Straße 78, 13088 Berlin",
@@ -3581,6 +3673,7 @@ def scrape_kubiz() -> list[dict]:
                 "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
+                "venue_address": venue_address,
                 "bezirk": "weissensee",
                 "type": event_type,
                 "description": description,
