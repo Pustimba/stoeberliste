@@ -16,6 +16,9 @@
                 <h2><a href="{{ event.link }}">{{ event.title }}</a></h2>
                 <p class="event-meta">
                     <a href="{{ url_for('ort', slug=event.venue_slug) }}">{{ event.venue_name }}</a>
+                    {% if event.is_free %}
+                    <span class="event-free-badge">Kostenlos</span>
+                    {% endif %}
                 </p>
                 {% if event.description %}
                 <p class="event-description">{{ event.description[:200] }}{% if event.description|length > 200 %}...{% endif %}</p>

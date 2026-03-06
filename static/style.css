@@ -662,6 +662,16 @@ h2 {
   font-weight: 500;
 }
 
+.event-free-badge {
+  background: #2e7d32;
+  color: #ffffff;
+  padding: 0.15em 0.5em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .event-details h2 {
   margin: var(--spacing-xs) 0;
   padding-right: 40px;

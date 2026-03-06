@@ -26,6 +26,9 @@
             {% if event.type %}
             <span class="event-type-badge">{{ event.type_display if event.type_display else event_types.get(event.type, event.type) }}</span>
             {% endif %}
+            {% if event.is_free %}
+            <span class="event-free-badge">Kostenlos</span>
+            {% endif %}
         </p>
         <h2><a href="{{ event.link }}" target="_blank" rel="noopener">{{ event.title }}</a></h2>
         {% if event.description %}

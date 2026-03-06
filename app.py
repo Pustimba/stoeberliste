@@ -404,6 +404,38 @@ def _classify_event_type(title: str, description: str = "") -> str:
     return "sonstiges"
 
 
+def _detect_free_event(text: str) -> bool:
+    """Erkennt ob ein Event kostenlos ist.
+
+    Sucht nach typischen Formulierungen für kostenlose Veranstaltungen.
+    """
+    if not text:
+        return False
+
+    text_lower = text.lower()
+
+    # Eindeutige Indikatoren für kostenlos
+    free_patterns = [
+        "eintritt frei",
+        "eintritt: frei",
+        "eintritt kostenlos",
+        "kostenloser eintritt",
+        "kostenfrei",
+        "ohne eintritt",
+        "freier eintritt",
+        "0 €",
+        "0€",
+        "0,- €",
+        "0,-€",
+    ]
+
+    for pattern in free_patterns:
+        if pattern in text_lower:
+            return True
+
+    return False
+
+
 def scrape_stressfaktor() -> list[dict]:
     """Scraped Events von stressfaktor.squat.net.
 
@@ -563,13 +595,14 @@ def _fetch_rosalux_details(event_url: str) -> dict:
     """Holt Veranstaltungsdetails von RosaLux Event-Detailseite.
 
     Nutzt Schema.org Markup (itemprop) für zuverlässige Extraktion.
-    Returns: dict mit venue_name, address, bezirk, event_type_original
+    Returns: dict mit venue_name, address, bezirk, event_type_original, is_free
     """
     result = {
         "venue_name": "",
         "address": "",
         "bezirk": "",
         "event_type_original": "",
+        "is_free": False,
     }
 
     try:
@@ -644,6 +677,10 @@ def _fetch_rosalux_details(event_url: str) -> dict:
                     plz = plz_elem.get_text(strip=True)
                 if city_elem:
                     city = city_elem.get_text(strip=True)
+
+        # Preis-Info erkennen
+        page_text = soup.get_text(" ", strip=True)
+        result["is_free"] = _detect_free_event(page_text)
 
         if street and plz:
             # Kombiniere Venue-Name mit Raum falls vorhanden
@@ -771,13 +808,14 @@ def scrape_rosalux() -> list[dict]:
             if desc_elem:
                 description = desc_elem.get_text(strip=True)
 
-            # Details von Detailseite holen (Venue, Adresse, Event-Typ)
+            # Details von Detailseite holen (Venue, Adresse, Event-Typ, Preis)
             details = _fetch_rosalux_details(event_link)
 
             venue_name = details.get("venue_name") or default_venue_name
             address = details.get("address") or default_address
             bezirk = details.get("bezirk") or "friedrichshain"
             event_type_original = details.get("event_type_original", "")
+            is_free = details.get("is_free", False)
 
             # Event-Typ für Filterung (Kategorie)
             event_type = "diskussion"
@@ -823,6 +861,7 @@ def scrape_rosalux() -> list[dict]:
                 "description": description,
                 "link": event_link,
                 "source": "rosalux",
+                "is_free": is_free,
             })
         except Exception:
             continue
@@ -835,8 +874,9 @@ def scrape_rosalux() -> list[dict]:
 # HAU Hebbel am Ufer Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_hau_description(url: str) -> str:
-    """Fetch description from HAU event detail page."""
+def _fetch_hau_details(url: str) -> dict:
+    """Fetch description and price info from HAU event detail page."""
+    result = {"description": "", "is_free": False}
     try:
         resp = requests.get(
             url,
@@ -851,14 +891,19 @@ def _fetch_hau_description(url: str) -> str:
         if real_content:
             strong_elem = real_content.select_one("strong")
             if strong_elem:
-                return strong_elem.get_text(strip=True)
-            # Fallback to first paragraph
-            p_elem = real_content.select_one("p")
-            if p_elem:
-                return p_elem.get_text(strip=True)
+                result["description"] = strong_elem.get_text(strip=True)
+            else:
+                # Fallback to first paragraph
+                p_elem = real_content.select_one("p")
+                if p_elem:
+                    result["description"] = p_elem.get_text(strip=True)
+
+        # Check for free event
+        page_text = soup.get_text(" ", strip=True)
+        result["is_free"] = _detect_free_event(page_text)
     except Exception:
         pass
-    return ""
+    return result
 
 
 def scrape_hau() -> list[dict]:
@@ -1026,8 +1071,10 @@ def scrape_hau() -> list[dict]:
             elif "ausstellung" in categories:
                 event_type = "ausstellung"
 
-            # Fetch description from detail page
-            description = _fetch_hau_description(event_link)
+            # Fetch description and price from detail page
+            hau_details = _fetch_hau_details(event_link)
+            description = hau_details.get("description", "")
+            is_free = hau_details.get("is_free", False)
 
             events.append({
                 "id": event_id,
@@ -1043,6 +1090,7 @@ def scrape_hau() -> list[dict]:
                 "description": description,
                 "link": event_link,
                 "source": "hau",
+                "is_free": is_free,
             })
         except Exception:
             continue
@@ -1257,7 +1305,7 @@ def scrape_baiz() -> list[dict]:
 
 def _fetch_silentgreen_details(url: str) -> dict:
     """Fetch details from Silent Green event detail page."""
-    result = {"title": "", "description": "", "type_display": ""}
+    result = {"title": "", "description": "", "type_display": "", "is_free": False}
     try:
         resp = requests.get(
             url,
@@ -1283,6 +1331,10 @@ def _fetch_silentgreen_details(url: str) -> dict:
             p = bodytext.select_one("p")
             if p:
                 result["description"] = p.get_text(strip=True)
+
+        # Check for free event
+        page_text = soup.get_text(" ", strip=True)
+        result["is_free"] = _detect_free_event(page_text)
 
     except Exception:
         pass
@@ -1375,6 +1427,7 @@ def scrape_silentgreen() -> list[dict]:
                     title = link_title
             description = details["description"]
             type_display = details["type_display"]
+            is_free = details.get("is_free", False)
 
             # Classify event type
             event_type = _classify_event_type(type_display or link_title, description)
@@ -1394,6 +1447,7 @@ def scrape_silentgreen() -> list[dict]:
                 "description": description,
                 "link": event_link,
                 "source": "silentgreen",
+                "is_free": is_free,
             })
         except Exception:
             continue
@@ -2087,8 +2141,8 @@ def scrape_so36() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_urania_details(url: str) -> dict:
-    """Fetch title and description from Urania event detail page."""
-    result = {"title": "", "description": ""}
+    """Fetch title, description and price info from Urania event detail page."""
+    result = {"title": "", "description": "", "is_free": False}
     try:
         resp = requests.get(
             url,
@@ -2107,6 +2161,10 @@ def _fetch_urania_details(url: str) -> dict:
         h2 = soup.select_one("h2.c-event-article_content_intro")
         if h2:
             result["description"] = h2.get_text(strip=True)
+
+        # Preis-Info: Suche nach Eintritt-Absatz
+        page_text = soup.get_text(" ", strip=True)
+        result["is_free"] = _detect_free_event(page_text)
 
     except Exception:
         pass
@@ -2203,6 +2261,7 @@ def scrape_urania() -> list[dict]:
             if details["title"]:
                 title = details["title"]
             description = details["description"]
+            is_free = details.get("is_free", False)
 
             event_id = hashlib.md5(f"urania-{event_link}".encode()).hexdigest()[:12]
             event_type = _classify_event_type(title, description)
@@ -2219,6 +2278,7 @@ def scrape_urania() -> list[dict]:
                 "description": description,
                 "link": event_link,
                 "source": "urania",
+                "is_free": is_free,
             })
         except Exception:
             continue
@@ -3269,7 +3329,8 @@ def scrape_weltkugel() -> list[dict]:
 def scrape_peteredel() -> list[dict]:
     """Scraped Events von peteredel.de.
 
-    Filtert reine Party-Events raus, behält kulturelle Veranstaltungen.
+    Filtert unpassende Events raus (Party, Tango, Kinder, etc.),
+    behält politische/kulturelle Veranstaltungen wie Lesungen, Diskussionen, Gespräche.
     """
     events = []
     venue_name = "Peter Edel"
@@ -3279,6 +3340,22 @@ def scrape_peteredel() -> list[dict]:
         bezirk="weissensee",
         url="https://www.peteredel.de",
     )
+
+    # Begriffe die auf unpassende Events hindeuten (werden lowercase verglichen)
+    BLOCKED_KEYWORDS = [
+        "tango", "tanztee", "tanzen", "tanzfest", "tanzt",
+        "party", "disco", "80s", "90s", "schlager",
+        "rudelsingen", "karaoke",
+        "pittiplatsch", "kinderkino", "kindertheater", "hops", "hopsi", "hits für kids",
+        "bootcamp", "yoga", "meditation",
+        "sonntagsschön", "brunch",
+        "liszt", "kammermusik", "klassik",
+        "sip&smash", "juice",
+        "ginverkostung", "weinverkostung", "whiskyverkostung",
+        "after work", "video dome",
+        " tour",  # Reine Konzerttouren (mit Leerzeichen davor)
+        "shanderilan",  # Veljanov-Tour
+    ]
 
     try:
         resp = requests.get(
@@ -3331,6 +3408,11 @@ def scrape_peteredel() -> list[dict]:
                 continue
 
             event_link = f"https://www.peteredel.de{href}" if href.startswith("/") else href
+
+            # Filter: Unpassende Events überspringen
+            title_lower = title.lower()
+            if any(keyword in title_lower for keyword in BLOCKED_KEYWORDS):
+                continue
 
             # Beschreibung aus nachfolgendem p-Tag
             description = ""
