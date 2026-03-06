@@ -2086,6 +2086,33 @@ def scrape_so36() -> list[dict]:
 # Urania Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_urania_details(url: str) -> dict:
+    """Fetch title and description from Urania event detail page."""
+    result = {"title": "", "description": ""}
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Titel aus h1
+        h1 = soup.select_one("h1.c-event-article_content_title")
+        if h1:
+            result["title"] = h1.get_text(strip=True)
+
+        # Beschreibung aus h2 intro
+        h2 = soup.select_one("h2.c-event-article_content_intro")
+        if h2:
+            result["description"] = h2.get_text(strip=True)
+
+    except Exception:
+        pass
+    return result
+
+
 def scrape_urania() -> list[dict]:
     """Scraped Events von urania.de."""
     events = []
@@ -2171,8 +2198,14 @@ def scrape_urania() -> list[dict]:
             if not event_date:
                 continue
 
+            # Fetch details from event page
+            details = _fetch_urania_details(event_link)
+            if details["title"]:
+                title = details["title"]
+            description = details["description"]
+
             event_id = hashlib.md5(f"urania-{event_link}".encode()).hexdigest()[:12]
-            event_type = _classify_event_type(title, "")
+            event_type = _classify_event_type(title, description)
 
             events.append({
                 "id": event_id,
@@ -2183,7 +2216,7 @@ def scrape_urania() -> list[dict]:
                 "venue_name": venue_name,
                 "bezirk": "schoeneberg",
                 "type": event_type,
-                "description": "",
+                "description": description,
                 "link": event_link,
                 "source": "urania",
             })
