@@ -35,7 +35,7 @@
       </ul>
     </li>
     <li class="dropdown">
-      <button type="button" class="dropdown-toggle">Orte</button>
+      <button type="button" class="dropdown-toggle">Veranstalter</button>
       <ul class="dropdown-content">
         {% for slug, venue in venues.items() %}
           <li><a href="{{ url_for('ort', slug=slug) }}">{{ venue.name }}</a></li>
@@ -82,7 +82,7 @@
     </section>
     <section class="acc">
       <button class="acc-trigger" aria-expanded="false">
-        <span>Orte</span><span class="chev">▾</span>
+        <span>Veranstalter</span><span class="chev">▾</span>
       </button>
       <div class="acc-panel">
         <ul>

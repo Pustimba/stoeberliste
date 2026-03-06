@@ -55,6 +55,30 @@ def slugify(text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Veranstalter (Quellen) - für Dropdown-Menü
+# ─────────────────────────────────────────────────────────────────────────────
+
+VERANSTALTER = {
+    "rosa-luxemburg-stiftung": {"name": "Rosa-Luxemburg-Stiftung", "url": "https://www.rosalux.de"},
+    "hau-hebbel-am-ufer": {"name": "HAU Hebbel am Ufer", "url": "https://www.hebbel-am-ufer.de"},
+    "literaturforum-im-brecht-haus": {"name": "Literaturforum im Brecht-Haus", "url": "https://lfbrecht.de"},
+    "baiz": {"name": "B.A.I.Z.", "url": "https://baiz.info"},
+    "silent-green-kulturquartier": {"name": "Silent Green Kulturquartier", "url": "https://www.silent-green.net"},
+    "acud-macht-neu": {"name": "ACUD macht neu", "url": "https://acudmachtneu.de"},
+    "regenbogenfabrik": {"name": "Regenbogenfabrik", "url": "https://regenbogenfabrik.de"},
+    "brotfabrik": {"name": "Brotfabrik", "url": "https://brotfabrik-berlin.de"},
+    "so36": {"name": "SO36", "url": "https://so36.com"},
+    "urania-berlin": {"name": "Urania Berlin", "url": "https://www.urania.de"},
+    "festsaal-kreuzberg": {"name": "Festsaal Kreuzberg", "url": "https://festsaal-kreuzberg.de"},
+    "panke": {"name": "Panke", "url": "https://panke.gallery"},
+    "kino-central": {"name": "Kino Central", "url": "https://kino-central.de"},
+    "lichtblick-kino": {"name": "Lichtblick Kino", "url": "https://lichtblick-kino.org"},
+    "lettretage": {"name": "Lettrétage", "url": "https://lettretage.de"},
+    "cinema-surreal": {"name": "Cinema Surreal", "url": "https://cinemasurreal.de"},
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Dynamische Veranstaltungsorte (wird durch Scraper befüllt)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -70,6 +94,11 @@ def get_all_venues() -> dict[str, dict]:
     all_venues = dict(VENUES)
     all_venues.update(_DYNAMIC_VENUES)
     return all_venues
+
+
+def get_veranstalter() -> dict[str, dict]:
+    """Gibt alle Veranstalter für das Dropdown zurück."""
+    return VERANSTALTER
 
 
 def get_or_create_venue(name: str, adresse: str = None, bezirk: str = None, url: str = None) -> str:
@@ -188,6 +217,12 @@ EVENT_TYPES = {
 
 VENUE_LOGOS = {
     "hau-hebbel-am-ufer": "hau-hebbel-am-ufer.svg",
+    "brotfabrik": "brotfabrik.svg",
+    "festsaal-kreuzberg": "festsaal-kreuzberg.svg",
+    "kino-central": "kino-central.svg",
+    "literaturforum-im-brecht-haus": "literaturforum-im-brecht-haus.svg",
+    "rosa-luxemburg-stiftung": "rosa-luxemburg-stiftung.svg",
+    "urania-berlin": "urania-berlin.svg",
 }
 
 
@@ -231,6 +266,36 @@ def get_events_by_date(date: datetime) -> list[dict]:
 def get_events_by_venue(venue_slug: str) -> list[dict]:
     """Filtert Events nach Veranstaltungsort."""
     return [e for e in _EVENT_CACHE if e.get("venue_slug") == venue_slug]
+
+
+# Mapping von Veranstalter-Slug zu Source-ID
+VERANSTALTER_SOURCE_MAP = {
+    "rosa-luxemburg-stiftung": "rosalux",
+    "hau-hebbel-am-ufer": "hau",
+    "literaturforum-im-brecht-haus": "lfbrecht",
+    "baiz": "baiz",
+    "silent-green-kulturquartier": "silentgreen",
+    "acud-macht-neu": "acud",
+    "regenbogenfabrik": "regenbogenfabrik",
+    "brotfabrik": "brotfabrik",
+    "so36": "so36",
+    "urania-berlin": "urania",
+    "festsaal-kreuzberg": "festsaal",
+    "panke": "panke",
+    "kino-central": "kino-central",
+    "lichtblick-kino": "lichtblick",
+    "lettretage": "lettretage",
+    "cinema-surreal": "cinemasurreal",
+}
+
+
+def get_events_by_veranstalter(veranstalter_slug: str) -> list[dict]:
+    """Filtert Events nach Veranstalter (source)."""
+    source_id = VERANSTALTER_SOURCE_MAP.get(veranstalter_slug)
+    if source_id:
+        return [e for e in _EVENT_CACHE if e.get("source") == source_id]
+    # Fallback: nach venue_slug suchen
+    return [e for e in _EVENT_CACHE if e.get("venue_slug") == veranstalter_slug]
 
 
 def get_events_by_type(type_slug: str) -> list[dict]:
@@ -3218,7 +3283,7 @@ def index():
     return render_template(
         "index.html",
         events=events,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
     )
@@ -3244,7 +3309,7 @@ def tag(datum: str):
         "tag.html",
         events=events,
         datum=target_date,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
     )
@@ -3252,22 +3317,23 @@ def tag(datum: str):
 
 @app.route("/ort/<slug>")
 def ort(slug: str):
-    """Events für einen bestimmten Veranstaltungsort."""
-    all_venues = get_all_venues()
-    if slug not in all_venues:
-        # Vielleicht existiert der Venue noch nicht - 404 statt redirect
+    """Events für einen bestimmten Veranstalter."""
+    veranstalter = get_veranstalter()
+
+    if slug not in veranstalter:
+        # Unbekannter Veranstalter
         return render_template(
             "ort.html",
             events=[],
             venue={"name": slug.replace("-", " ").title(), "adresse": None, "url": None},
             venue_slug=slug,
-            venues=all_venues,
+            venues=veranstalter,
             event_types=EVENT_TYPES,
             bezirke=BEZIRKE,
         )
 
-    venue = all_venues[slug]
-    events = get_events_by_venue(slug)
+    venue = veranstalter[slug]
+    events = get_events_by_veranstalter(slug)
     events = sorted(events, key=lambda x: x.get("date", datetime.max))
 
     return render_template(
@@ -3275,7 +3341,7 @@ def ort(slug: str):
         events=events,
         venue=venue,
         venue_slug=slug,
-        venues=all_venues,
+        venues=veranstalter,
         event_types=EVENT_TYPES,
         bezirke=BEZIRKE,
     )
@@ -3297,7 +3363,7 @@ def typ(slug: str):
         type_slug=slug,
         event_types=EVENT_TYPES,
         bezirke=BEZIRKE,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
     )
 
 
@@ -3317,7 +3383,7 @@ def bezirk(slug: str):
         bezirk_slug=slug,
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
     )
 
 
@@ -3336,7 +3402,7 @@ def woche():
     return render_template(
         "woche.html",
         week_events=week_events,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
     )
@@ -3386,7 +3452,7 @@ def suche():
         query=query,
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
         time_slots=TIME_SLOTS,
         selected_bezirke=bezirk_filter,
         selected_types=typ_filter,
@@ -3404,7 +3470,7 @@ def merkliste():
     return render_template(
         "merkliste.html",
         events=events,
-        venues=get_all_venues(),
+        venues=get_veranstalter(),
         bezirke=BEZIRKE,
         event_types=EVENT_TYPES,
     )
