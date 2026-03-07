@@ -36,15 +36,15 @@ def slugify(text: str) -> str:
     """Konvertiert Text zu URL-freundlichem Slug."""
     if not text:
         return ""
-    # Normalize unicode
-    text = unicodedata.normalize("NFKD", text)
-    # Replace umlauts
+    # Replace umlauts BEFORE normalization (NFKD decomposes them)
     replacements = {
         "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
         "Ä": "ae", "Ö": "oe", "Ü": "ue",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
+    # Normalize unicode
+    text = unicodedata.normalize("NFKD", text)
     # Remove accents
     text = text.encode("ascii", "ignore").decode("ascii")
     # Lowercase and replace spaces/special chars
@@ -5747,6 +5747,312 @@ def scrape_futurium() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ZZF Potsdam Scraper (Leibniz-Zentrum für Zeithistorische Forschung)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_zzf() -> list[dict]:
+    """Scraped Events vom ZZF Potsdam."""
+    events = []
+    venue_name = "Leibniz-Zentrum für Zeithistorische Forschung"
+    venue_address = "Am Neuen Markt 1, 14467 Potsdam"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="potsdam",
+        url="https://zzf-potsdam.de",
+    )
+
+    url = "https://zzf-potsdam.de/wissenstransfer/veranstaltungen"
+    now = datetime.now()
+
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events als Links zu Veranstaltungsseiten
+        for link in soup.select("a[href*='/wissenstransfer/veranstaltungen/']"):
+            try:
+                href = link.get("href", "")
+                if not href or href == "/wissenstransfer/veranstaltungen" or href.endswith("/veranstaltungen"):
+                    continue
+
+                event_link = href if href.startswith("http") else f"https://zzf-potsdam.de{href}"
+
+                # Titel aus dem Link oder h3 extrahieren
+                h3 = link.select_one("h3")
+                if h3:
+                    title = h3.get_text(strip=True)
+                else:
+                    title = link.get_text(strip=True)
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Datum aus dem Link-Text extrahieren
+                link_text = link.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{1,2})\.\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+(\d{4})", link_text)
+                if not date_match:
+                    # Alternatives Format: DD.MM.YYYY
+                    date_match2 = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", link_text)
+                    if date_match2:
+                        day = int(date_match2.group(1))
+                        month = int(date_match2.group(2))
+                        year = int(date_match2.group(3))
+                    else:
+                        continue
+                else:
+                    day = int(date_match.group(1))
+                    month_name = date_match.group(2)
+                    year = int(date_match.group(3))
+                    month_map = {
+                        "Januar": 1, "Februar": 2, "März": 3, "April": 4, "Mai": 5, "Juni": 6,
+                        "Juli": 7, "August": 8, "September": 9, "Oktober": 10, "November": 11, "Dezember": 12
+                    }
+                    month = month_map.get(month_name, 1)
+
+                # Uhrzeit aus Link-Text
+                time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", link_text)
+                if time_match:
+                    hour, minute = int(time_match.group(1)), int(time_match.group(2))
+                else:
+                    hour, minute = 18, 0  # Default
+
+                event_date = datetime(year, month, day, hour, minute)
+                if event_date.date() < now.date():
+                    continue
+
+                time_str = f"{hour:02d}:{minute:02d}"
+
+                # Detailseite laden
+                description = ""
+                event_address = venue_address
+
+                try:
+                    detail_resp = requests.get(
+                        event_link,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                        timeout=10,
+                    )
+                    detail_resp.raise_for_status()
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                    # Ort aus Detailseite
+                    page_text = detail_soup.get_text(" ", strip=True)
+                    ort_match = re.search(r"Ort[:\s]+([^,]+,\s*[^,]+,\s*\d{5}\s*[A-Za-zäöüÄÖÜß]+)", page_text)
+                    if ort_match:
+                        event_address = ort_match.group(1).strip()
+                    elif "potsdam" not in page_text.lower() and "berlin" not in page_text.lower():
+                        # Event nicht in Potsdam/Berlin
+                        pass
+
+                    # Beschreibung
+                    for p in detail_soup.select("p"):
+                        text = p.get_text(" ", strip=True)
+                        if len(text) > 80 and not text.startswith("Datum") and not text.startswith("Ort"):
+                            description = text[:300]
+                            break
+
+                except Exception:
+                    pass
+
+                event_id = hashlib.md5(
+                    f"zzf-{title}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                # Event-Typ bestimmen
+                title_lower = title.lower()
+                if "vortrag" in title_lower:
+                    event_type = "vortrag"
+                elif "lesung" in title_lower or "buchvorstellung" in title_lower:
+                    event_type = "lesung"
+                elif "diskussion" in title_lower or "gespräch" in title_lower:
+                    event_type = "diskussion"
+                elif "tagung" in title_lower or "konferenz" in title_lower:
+                    event_type = "konferenz"
+                elif "workshop" in title_lower or "seminar" in title_lower:
+                    event_type = "workshop"
+                elif "ausstellung" in title_lower:
+                    event_type = "ausstellung"
+                else:
+                    event_type = "vortrag"
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": time_str,
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": event_address,
+                    "bezirk": "potsdam",
+                    "type": event_type,
+                    "description": description,
+                    "link": event_link,
+                    "source": "zzf",
+                })
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[ZZF] Fehler: {e}")
+
+    # Duplikate entfernen (gleicher Titel)
+    seen_titles = set()
+    unique_events = []
+    for event in events:
+        if event["title"] not in seen_titles:
+            seen_titles.add(event["title"])
+            unique_events.append(event)
+
+    print(f"[ZZF] {len(unique_events)} Events geladen")
+    return unique_events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MMZ Potsdam Scraper (Moses Mendelssohn Zentrum)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_mmz() -> list[dict]:
+    """Scraped Events vom Moses Mendelssohn Zentrum Potsdam."""
+    events = []
+    venue_name = "Moses Mendelssohn Zentrum"
+    venue_address = "Am Neuen Markt 8, 14467 Potsdam"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="potsdam",
+        url="https://www.mmz-potsdam.de",
+    )
+
+    url = "https://www.mmz-potsdam.de/aktuelles/veranstaltungen"
+    now = datetime.now()
+
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events sind als <p>Datum<br/><b><a>Title</a></b></p> strukturiert
+        for p in soup.select("p"):
+            try:
+                link = p.select_one("a[href*='/aktuelles/veranstaltungen/']")
+                if not link:
+                    continue
+
+                href = link.get("href", "")
+                if not href or href.endswith("/veranstaltungen") or href.endswith("/veranstaltungen/"):
+                    continue
+
+                event_link = href if href.startswith("http") else f"https://www.mmz-potsdam.de{href}"
+                title = link.get_text(strip=True)
+                if not title or len(title) < 5:
+                    continue
+
+                # Datum aus dem <p>-Text extrahieren (Format: "DD.MM.YY")
+                p_text = p.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{2})\.(\d{2})\.(\d{2})", p_text)
+                if not date_match:
+                    continue
+
+                date_text = date_match.group(0)
+
+                # Datum parsen (Format: DD.MM.YY)
+                day, month, year = map(int, date_text.split("."))
+                year = 2000 + year if year < 100 else year
+                event_date = datetime(year, month, day, 19, 0)  # Default 19:00
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Detailseite laden für mehr Infos
+                description = ""
+                time_str = "19:00"
+                event_address = venue_address
+
+                try:
+                    detail_resp = requests.get(
+                        event_link,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                        timeout=10,
+                    )
+                    detail_resp.raise_for_status()
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                    # Beschreibung aus Paragraphen
+                    for p in detail_soup.select("p"):
+                        text = p.get_text(" ", strip=True)
+                        if len(text) > 80 and not re.match(r"^\d{2}\.\d{2}\.\d{2}", text):
+                            description = text[:300]
+                            break
+
+                    # Uhrzeit suchen
+                    page_text = detail_soup.get_text(" ", strip=True)
+                    time_match = re.search(r"(\d{1,2})[:\.](\d{2})\s*Uhr", page_text)
+                    if time_match:
+                        hour, minute = int(time_match.group(1)), int(time_match.group(2))
+                        time_str = f"{hour:02d}:{minute:02d}"
+                        event_date = event_date.replace(hour=hour, minute=minute)
+
+                    # Prüfen ob Online-Event
+                    if "videokonferenz" in page_text.lower() or "online" in page_text.lower():
+                        event_address = "Online"
+
+                except Exception:
+                    pass
+
+                event_id = hashlib.md5(
+                    f"mmz-{title}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                # Event-Typ bestimmen
+                title_lower = title.lower()
+                if "vortrag" in title_lower or "vortragsreihe" in title_lower:
+                    event_type = "vortrag"
+                elif "lesung" in title_lower or "buchvorstellung" in title_lower:
+                    event_type = "lesung"
+                elif "diskussion" in title_lower or "gespräch" in title_lower:
+                    event_type = "diskussion"
+                elif "ausstellung" in title_lower:
+                    event_type = "ausstellung"
+                elif "workshop" in title_lower or "seminar" in title_lower:
+                    event_type = "workshop"
+                else:
+                    event_type = "vortrag"
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": time_str,
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": event_address,
+                    "bezirk": "potsdam",
+                    "type": event_type,
+                    "description": description,
+                    "link": event_link,
+                    "source": "mmz",
+                })
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[MMZ] Fehler: {e}")
+
+    print(f"[MMZ] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -5869,6 +6175,12 @@ def refresh_cache():
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
+
+    # MMZ Potsdam
+    all_events.extend(scrape_mmz())
+
+    # ZZF Potsdam
+    all_events.extend(scrape_zzf())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
