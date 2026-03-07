@@ -4015,6 +4015,515 @@ def scrape_planetarium() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Publix Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_publix() -> list[dict]:
+    """Scraped Events von publix.de (Haus des Journalismus)."""
+    events = []
+    venue_name = "Publix"
+    venue_address = "Friedrichstraße 225, 10969 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.publix.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.publix.de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Publix] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for link in soup.select('a[href*="/veranstaltungen/"]'):
+        try:
+            href = link.get("href", "")
+            if "/archiv" in href or href.endswith("/veranstaltungen") or href.endswith("/veranstaltungen/"):
+                continue
+
+            text = link.get_text(" ", strip=True)
+            if not text or len(text) < 10:
+                continue
+
+            # Datum extrahieren: "Dienstag 10.03. 18:30 – 20:00"
+            date_match = re.search(r"(\d{1,2})\.(\d{2})\.\s*(\d{1,2}):(\d{2})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            hour = int(date_match.group(3))
+            minute = int(date_match.group(4))
+
+            # Jahr bestimmen
+            year = now.year
+            event_date = datetime(year, month, day, hour, minute)
+            if event_date < now - timedelta(days=30):
+                event_date = datetime(year + 1, month, day, hour, minute)
+
+            if event_date.date() < now.date():
+                continue
+
+            time_str = f"{hour:02d}:{minute:02d}"
+
+            # Titel: Nach Uhrzeit kommt Event-Typ, dann Titel
+            # "Dienstag 10.03. 18:30 – 20:00 Gastveranstaltung Krisen im Kontext..."
+            title_match = re.search(r"\d{2}:\d{2}\s+(?:Gastveranstaltung|Publix\s+\w+|Gemeinsam\s+\w+)?\s*(.+)", text)
+            if title_match:
+                title = title_match.group(1).strip()
+            else:
+                # Fallback: Alles nach Zeit
+                title_match = re.search(r"\d{2}:\d{2}\s+(.+)", text)
+                title = title_match.group(1).strip() if title_match else text
+
+            # Kürzen wenn zu lang
+            if len(title) > 100:
+                title = title[:97] + "..."
+
+            event_link = href if href.startswith("http") else f"https://www.publix.de{href}"
+
+            # Event-Typ bestimmen
+            text_lower = text.lower()
+            if "film" in text_lower or "screening" in text_lower:
+                event_type = "film"
+            elif "buchpremiere" in text_lower or "lesung" in text_lower:
+                event_type = "lesung"
+            elif "diskussion" in text_lower or "gespräch" in text_lower:
+                event_type = "diskussion"
+            elif "workshop" in text_lower or "kurs" in text_lower:
+                event_type = "workshop"
+            else:
+                event_type = "diskussion"
+
+            event_id = hashlib.md5(f"publix-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "publix",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen (gleiche Links)
+    seen = set()
+    unique = []
+    for e in events:
+        if e["link"] not in seen:
+            seen.add(e["link"])
+            unique.append(e)
+
+    print(f"[Publix] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KW Institute for Contemporary Art Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_kw() -> list[dict]:
+    """Scraped Events von KW Institute for Contemporary Art."""
+    events = []
+    venue_name = "KW Institute for Contemporary Art"
+    venue_address = "Auguststraße 69, 10117 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.kw-berlin.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.kw-berlin.de/de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[KW] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for link in soup.select('a[href*="/veranstaltungen/"]'):
+        try:
+            href = link.get("href", "")
+            if href.endswith("/veranstaltungen") or href.endswith("/veranstaltungen/"):
+                continue
+
+            # Text enthält Datum und Titel: "Führung Sa, 07.03.26, 16:00–17:00 (de, en) Einblicke..."
+            text = link.get_text(" ", strip=True)
+            if not text or len(text) < 10:
+                continue
+
+            # Datum: "07.03.26" (2-stelliges Jahr)
+            date_match = re.search(r"(\d{1,2})\.(\d{2})\.(\d{2})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = 2000 + int(date_match.group(3))
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Zeit: "16:00–17:00" oder "16:00"
+            time_str = ""
+            time_match = re.search(r"(\d{1,2}):(\d{2})(?:–|$|\s)", text)
+            if time_match:
+                time_str = f"{int(time_match.group(1)):02d}:{time_match.group(2)}"
+
+            # Titel: Nach (de, en) oder nach der Zeit
+            title = ""
+            title_match = re.search(r"\((?:de|en|de,\s*en)\)\s*(.+)", text)
+            if title_match:
+                title = title_match.group(1).strip()
+            else:
+                # Fallback: Nach Zeitangabe
+                title_match = re.search(r"\d{2}:\d{2}(?:–\d{2}:\d{2})?\s+(.+)", text)
+                if title_match:
+                    title = title_match.group(1).strip()
+
+            if not title or len(title) < 5:
+                continue
+
+            # Event-Typ aus erstem Wort
+            first_word = text.split()[0].lower() if text else ""
+            if "führung" in first_word:
+                event_type = "workshop"
+            elif "workshop" in first_word:
+                event_type = "workshop"
+            elif "gespräch" in first_word or "talk" in first_word:
+                event_type = "diskussion"
+            elif "konzert" in first_word or "performance" in first_word:
+                event_type = "konzert"
+            else:
+                event_type = "ausstellung"
+
+            # Kostenlos?
+            is_free = "eintritt frei" in text.lower() or "free" in text.lower()
+
+            event_link = href if href.startswith("http") else f"https://www.kw-berlin.de{href}"
+            event_id = hashlib.md5(f"kw-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "kw",
+                "is_free": is_free,
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        key = f"{e['link']}-{e['date'].isoformat()}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+
+    print(f"[KW] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Topographie des Terrors Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+GERMAN_MONTHS = {
+    "januar": 1, "februar": 2, "märz": 3, "april": 4,
+    "mai": 5, "juni": 6, "juli": 7, "august": 8,
+    "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+}
+
+
+def scrape_topographie() -> list[dict]:
+    """Scraped Events von Topographie des Terrors."""
+    events = []
+    venue_name = "Topographie des Terrors"
+    venue_address = "Niederkirchnerstraße 8, 10963 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.topographie.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.topographie.de/veranstaltungen/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Topographie] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    # Teaser-Elemente suchen
+    for teaser in soup.select(".c-teaser--event"):
+        try:
+            link = teaser.select_one("a[href]")
+            if not link:
+                continue
+
+            href = link.get("href", "")
+            text = teaser.get_text(" ", strip=True)
+
+            # Datum: "10 März" -> Tag + Monat
+            date_match = re.search(r"(\d{1,2})\s+(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)", text, re.IGNORECASE)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month_name = date_match.group(2).lower()
+            month = GERMAN_MONTHS.get(month_name, 0)
+            if not month:
+                continue
+
+            # Jahr: aktuelles Jahr, oder nächstes wenn Monat vergangen
+            year = now.year
+            if month < now.month or (month == now.month and day < now.day):
+                year += 1
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Zeit: "19:00 Uhr"
+            time_str = ""
+            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+            if time_match:
+                time_str = f"{int(time_match.group(1)):02d}:{time_match.group(2)}"
+
+            # Titel: Nach "Format <Typ>" kommt der Titel
+            title = ""
+            title_match = re.search(r"(?:Buchpräsentation|Podiumsdiskussion|Vortrag|Lesung|Filmvorführung|Führung)\s+(.+)", text)
+            if title_match:
+                title = title_match.group(1).strip()
+            else:
+                # Fallback: Link-Text
+                title = link.get_text(strip=True)
+
+            if not title or len(title) < 5:
+                continue
+
+            # Event-Typ
+            if "buchpräsentation" in text.lower():
+                event_type = "lesung"
+            elif "podiumsdiskussion" in text.lower() or "vortrag" in text.lower():
+                event_type = "diskussion"
+            elif "film" in text.lower():
+                event_type = "film"
+            elif "führung" in text.lower():
+                event_type = "workshop"
+            else:
+                event_type = "diskussion"
+
+            event_link = href if href.startswith("http") else f"https://www.topographie.de{href}"
+            event_id = hashlib.md5(f"topographie-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "topographie",
+                "is_free": True,  # Eintritt immer frei
+            })
+        except Exception:
+            continue
+
+    print(f"[Topographie] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Jüdisches Museum Berlin Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+GERMAN_MONTHS_SHORT = {
+    "jan": 1, "feb": 2, "mär": 3, "apr": 4,
+    "mai": 5, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "okt": 10, "nov": 11, "dez": 12,
+}
+
+
+def scrape_jmberlin() -> list[dict]:
+    """Scraped Events vom Jüdischen Museum Berlin."""
+    events = []
+    venue_name = "Jüdisches Museum Berlin"
+    venue_address = "Lindenstraße 9-14, 10969 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.jmberlin.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.jmberlin.de/kalender",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[JMBerlin] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for teaser in soup.select(".teaser"):
+        try:
+            link = teaser.select_one("a[href]")
+            if not link:
+                continue
+
+            href = link.get("href", "")
+            text = teaser.get_text(" ", strip=True)
+
+            # Titel: Erster Teil vor dem Datum
+            # "Shoah Filmscreening im Rahmen der Ausstellung Claude Lanzmann. Die Aufzeichnungen (ausgebucht) Sa, 7. Mär 2026"
+            title = link.get_text(strip=True)
+            if not title or len(title) < 5:
+                continue
+
+            # Datum: "Sa, 7. Mär 2026" oder "7. Mär 2026"
+            date_match = re.search(r"(\d{1,2})\.\s*(Jan|Feb|Mär|Apr|Mai|Jun|Jul|Aug|Sep|Okt|Nov|Dez)\s*(\d{4})", text, re.IGNORECASE)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month_name = date_match.group(2).lower()
+            month = GERMAN_MONTHS_SHORT.get(month_name, 0)
+            year = int(date_match.group(3))
+
+            if not month:
+                continue
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Zeit: "12–17 Uhr" oder "19 Uhr"
+            time_str = ""
+            time_match = re.search(r"(\d{1,2})(?:[–:]\d{1,2})?\s*Uhr", text)
+            if time_match:
+                hour = int(time_match.group(1))
+                time_str = f"{hour:02d}:00"
+
+            # Event-Typ
+            text_lower = text.lower()
+            if "führung" in text_lower:
+                event_type = "workshop"
+            elif "konzert" in text_lower:
+                event_type = "konzert"
+            elif "film" in text_lower:
+                event_type = "film"
+            elif "lesung" in text_lower:
+                event_type = "lesung"
+            elif "workshop" in text_lower:
+                event_type = "workshop"
+            elif "gespräch" in text_lower or "diskussion" in text_lower:
+                event_type = "diskussion"
+            else:
+                event_type = "ausstellung"
+
+            # Ausgebucht überspringen?
+            if "ausgebucht" in text_lower:
+                continue
+
+            event_link = href if href.startswith("http") else f"https://www.jmberlin.de{href}"
+            event_id = hashlib.md5(f"jmberlin-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "jmberlin",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        key = f"{e['link']}-{e['date'].isoformat()}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+
+    print(f"[JMBerlin] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Futurium Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4244,6 +4753,18 @@ def refresh_cache():
 
     # Zeiss-Großplanetarium
     all_events.extend(scrape_planetarium())
+
+    # Publix (Haus des Journalismus)
+    all_events.extend(scrape_publix())
+
+    # KW Institute for Contemporary Art
+    all_events.extend(scrape_kw())
+
+    # Topographie des Terrors
+    all_events.extend(scrape_topographie())
+
+    # Jüdisches Museum Berlin
+    all_events.extend(scrape_jmberlin())
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
