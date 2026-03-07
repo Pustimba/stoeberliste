@@ -2008,6 +2008,29 @@ def scrape_brotfabrik() -> list[dict]:
                 description = description.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
                 # Mehrzeilige Beschreibungen (Fortsetzungszeilen beginnen mit Leerzeichen)
                 description = re.sub(r"\r?\n ", "", description)
+
+                # Termine und Filminfos am Anfang entfernen
+                # Suche nach echtem Satzanfang (Artikel + Wort)
+                match = re.search(
+                    r"\s+(Der|Die|Das|Ein|Eine|Es|Sie|Er|Wir|Im|In|Mit|Hier|Jeden|Jede)\s+[a-zA-ZäöüßÄÖÜ]{2,}",
+                    description
+                )
+                if match:
+                    description = description[match.start():].strip()
+                else:
+                    # Name + Verb nach "Uhr" (z.B. "Emilie Kempin-Spyri war")
+                    match = re.search(
+                        r"Uhr\s+([A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß-]+\s+(war|ist|hat|lebt|zeigt|wurde))",
+                        description
+                    )
+                    if match:
+                        description = match.group(1)
+                    else:
+                        # Fallback: Nach "Uhr" + doppeltem Leerzeichen
+                        match = re.search(r"Uhr\s{2,}([A-ZÄÖÜ])", description)
+                        if match:
+                            description = description[match.start(1):].strip()
+
                 description = description[:300]
 
             # Kategorie
