@@ -5175,6 +5175,130 @@ def scrape_kunstraumkreuzberg() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ZOiS (Zentrum für Osteuropa- und internationale Studien) Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_zois() -> list[dict]:
+    """Scraped Events von zois-berlin.de."""
+    events = []
+    venue_name = "ZOiS – Zentrum für Osteuropa- und internationale Studien"
+    venue_address = "Anton-Wilhelm-Amo-Str. 60, 10117 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.zois-berlin.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.zois-berlin.de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[ZOiS] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for article in soup.select("article.eventTeaser"):
+        try:
+            # Link
+            link_tag = article.select_one("a.eventTeaser__wrapper")
+            if not link_tag:
+                continue
+            href = link_tag.get("href", "")
+            event_link = f"https://www.zois-berlin.de{href}" if href.startswith("/") else href
+
+            # Kategorie/SuperHeadline
+            super_headline = article.select_one(".eventTeaser__superHeadline")
+            category = super_headline.get_text(strip=True) if super_headline else ""
+
+            # Titel
+            title_tag = article.select_one(".eventTeaser__title")
+            if not title_tag:
+                continue
+            title = title_tag.get_text(strip=True)
+
+            # Beschreibung
+            desc_tag = article.select_one(".eventTeaser__main")
+            description = desc_tag.get_text(" ", strip=True)[:250] if desc_tag else ""
+
+            # Datum
+            date_tag = article.select_one(".data__date")
+            if not date_tag:
+                continue
+            date_str = date_tag.get_text(strip=True)  # z.B. "10.03.2026"
+            try:
+                event_date = datetime.strptime(date_str, "%d.%m.%Y")
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            # Uhrzeit
+            time_tag = article.select_one(".eventInfo__data__start .data__time")
+            time_str = time_tag.get_text(strip=True) if time_tag else ""
+
+            # Ort (kann auch "Online" sein)
+            location_tag = article.select_one(".eventInfo__section--location .data__html")
+            location = ""
+            is_online = False
+            if location_tag:
+                location = location_tag.get_text(" ", strip=True)
+                if "online" in location.lower():
+                    is_online = True
+
+            # Event-Typ bestimmen
+            cat_lower = (category + " " + title).lower()
+            if "panel" in cat_lower or "discussion" in cat_lower or "diskussion" in cat_lower:
+                event_type = "diskussion"
+            elif "lecture" in cat_lower or "vortrag" in cat_lower:
+                event_type = "diskussion"
+            elif "exhibition" in cat_lower or "ausstellung" in cat_lower:
+                event_type = "ausstellung"
+            elif "film" in cat_lower:
+                event_type = "film"
+            elif "lesung" in cat_lower or "reading" in cat_lower:
+                event_type = "lesung"
+            else:
+                event_type = "diskussion"
+
+            # Titel mit Kategorie erweitern wenn sinnvoll
+            if category and category not in title:
+                full_title = f"{title}"
+            else:
+                full_title = title
+
+            event_id = hashlib.md5(f"zois-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": full_title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address if not is_online else "Online",
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": description,
+                "link": event_link,
+                "source": "zois",
+            })
+        except Exception:
+            continue
+
+    print(f"[ZOiS] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Futurium Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -5432,6 +5556,9 @@ def refresh_cache():
 
     # Kunstraum Kreuzberg/Bethanien
     all_events.extend(scrape_kunstraumkreuzberg())
+
+    # ZOiS
+    all_events.extend(scrape_zois())
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
