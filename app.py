@@ -4075,21 +4075,49 @@ def scrape_publix() -> list[dict]:
 
             time_str = f"{hour:02d}:{minute:02d}"
 
-            # Titel: Nach Uhrzeit kommt Event-Typ, dann Titel
-            # "Dienstag 10.03. 18:30 – 20:00 Gastveranstaltung Krisen im Kontext..."
-            title_match = re.search(r"\d{2}:\d{2}\s+(?:Gastveranstaltung|Publix\s+\w+|Gemeinsam\s+\w+)?\s*(.+)", text)
-            if title_match:
-                title = title_match.group(1).strip()
-            else:
-                # Fallback: Alles nach Zeit
-                title_match = re.search(r"\d{2}:\d{2}\s+(.+)", text)
-                title = title_match.group(1).strip() if title_match else text
+            event_link = href if href.startswith("http") else f"https://www.publix.de{href}"
+
+            # Detailseite für Titel und Beschreibung laden
+            title = ""
+            description = ""
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                # Titel aus h1
+                h1 = detail_soup.select_one("h1[itemprop='name'], h1")
+                if h1:
+                    title = h1.get_text(strip=True)
+
+                # Beschreibung aus dem Content-Bereich
+                for div in detail_soup.select("div"):
+                    classes = div.get("class", [])
+                    if any("col-span" in c for c in classes):
+                        p = div.select_one("p")
+                        if p:
+                            text = p.get_text(" ", strip=True)
+                            if len(text) > 50:
+                                description = text[:300]
+                                break
+            except Exception:
+                pass
+
+            # Fallback für Titel
+            if not title:
+                title_match = re.search(r"\d{2}:\d{2}\s+(?:Gastveranstaltung|Publix\s+\w+|Gemeinsam\s+\w+)?\s*(.+)", text)
+                if title_match:
+                    title = title_match.group(1).strip()
+                else:
+                    title_match = re.search(r"\d{2}:\d{2}\s+(.+)", text)
+                    title = title_match.group(1).strip() if title_match else text
 
             # Kürzen wenn zu lang
             if len(title) > 100:
                 title = title[:97] + "..."
-
-            event_link = href if href.startswith("http") else f"https://www.publix.de{href}"
 
             # Event-Typ bestimmen
             text_lower = text.lower()
@@ -4116,7 +4144,7 @@ def scrape_publix() -> list[dict]:
                 "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": event_type,
-                "description": "",
+                "description": description,
                 "link": event_link,
                 "source": "publix",
             })
