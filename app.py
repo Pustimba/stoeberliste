@@ -2055,40 +2055,75 @@ def scrape_brotfabrik() -> list[dict]:
             url_match = re.search(r"URL:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
             event_link = url_match.group(1).strip() if url_match else "https://brotfabrik-berlin.de"
 
-            # Beschreibung
+            # Beschreibung aus iCal für is_free Check
             desc_match = re.search(r"DESCRIPTION:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
             description = ""
             description_raw = ""  # Für is_free Check vor Bereinigung
             if desc_match:
-                description = desc_match.group(1).strip()
-                description = description.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
-                # Mehrzeilige Beschreibungen (Fortsetzungszeilen beginnen mit Leerzeichen)
-                description = re.sub(r"\r?\n ", "", description)
-                description_raw = description  # Vor Bereinigung speichern
+                description_raw = desc_match.group(1).strip()
+                description_raw = description_raw.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
+                description_raw = re.sub(r"\r?\n ", "", description_raw)
 
-                # Termine und Filminfos am Anfang entfernen
-                # Suche nach echtem Satzanfang (Artikel + Wort)
-                match = re.search(
-                    r"\s+(Der|Die|Das|Ein|Eine|Es|Sie|Er|Wir|Im|In|Mit|Hier|Jeden|Jede)\s+[a-zA-ZäöüßÄÖÜ]{2,}",
-                    description
+            # Beschreibung von Detailseite laden (bessere Qualität)
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=8,
                 )
-                if match:
-                    description = description[match.start():].strip()
-                else:
-                    # Name + Verb nach "Uhr" (z.B. "Emilie Kempin-Spyri war")
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                # Beschreibung aus .tribe-events-single-event-description
+                desc_div = detail_soup.select_one(".tribe-events-single-event-description, .tribe-events-content")
+                if desc_div:
+                    # Alle Paragraphen durchgehen
+                    for p in desc_div.select("p"):
+                        text = p.get_text(" ", strip=True)
+                        # Überspringe zu kurze Texte
+                        if len(text) < 30:
+                            continue
+                        # Überspringe Termine wie "6.3. | 21 Uhr" oder "20.2.26 | 19 Uhr"
+                        if re.match(r"^\d+\.\d+\.?\d*\s*\|", text):
+                            continue
+                        # Überspringe Filminfo "F 2025 | 105 min"
+                        if re.match(r"^[A-Z]{1,3}\s+\d{4}\s*\|", text):
+                            continue
+                        # Überspringe reine Uhrzeiten wie "Dienstag: 11-14 Uhr"
+                        if re.match(r"^(Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)", text):
+                            continue
+                        # Überspringe generische Salon-Beschreibungen
+                        if "monatliche" in text.lower() and "salon" in text.lower():
+                            continue
+                        # Überspringe Kontakt-Infos
+                        if "@" in text or "kontakt:" in text.lower():
+                            continue
+                        # Überspringe "Einfache Sprache:" Überschriften
+                        if text.lower().strip() in ["einfache sprache:", "einfache sprache"]:
+                            continue
+                        # Überspringe "Eintritt frei" als alleinstehend
+                        if text.lower().strip() == "eintritt frei":
+                            continue
+                        # Ersten sinnvollen Absatz gefunden
+                        # Nur ersten Satz nehmen wenn zu lang
+                        if len(text) > 200:
+                            # Am Satzende abschneiden
+                            sentences = re.split(r'(?<=[.!?])\s+', text)
+                            description = sentences[0] if sentences else text[:200]
+                        else:
+                            description = text
+                        break
+            except Exception:
+                # Fallback: iCal-Beschreibung bereinigen
+                if description_raw:
+                    # Suche nach echtem Satzanfang
                     match = re.search(
-                        r"Uhr\s+([A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß-]+\s+(war|ist|hat|lebt|zeigt|wurde))",
-                        description
+                        r"((?:^|\s)(?:Der|Die|Das|Ein|Eine|Es|Sie|Er|Wir|Im|In|Mit|Hier)[^\n]{20,})",
+                        description_raw
                     )
                     if match:
-                        description = match.group(1)
+                        description = match.group(1).strip()[:200]
                     else:
-                        # Fallback: Nach "Uhr" + doppeltem Leerzeichen
-                        match = re.search(r"Uhr\s{2,}([A-ZÄÖÜ])", description)
-                        if match:
-                            description = description[match.start(1):].strip()
-
-                description = description[:300]
+                        description = description_raw[:200]
 
             # Kategorie
             cat_match = re.search(r"CATEGORIES:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
@@ -4093,16 +4128,13 @@ def scrape_publix() -> list[dict]:
                 if h1:
                     title = h1.get_text(strip=True)
 
-                # Beschreibung aus dem Content-Bereich
-                for div in detail_soup.select("div"):
-                    classes = div.get("class", [])
-                    if any("col-span" in c for c in classes):
-                        p = div.select_one("p")
-                        if p:
-                            text = p.get_text(" ", strip=True)
-                            if len(text) > 50:
-                                description = text[:300]
-                                break
+                # Beschreibung aus dem Content-Bereich (text-body-18/20/24 Paragraphen)
+                for p in detail_soup.select("p.text-body-18, p.text-body-20, p.text-body-24"):
+                    text = p.get_text(" ", strip=True)
+                    # Überspringe kurze Texte und Sprecherlisten
+                    if len(text) > 80 and not text.startswith("Mit ") and "ist " not in text[:50]:
+                        description = text[:300]
+                        break
             except Exception:
                 pass
 
