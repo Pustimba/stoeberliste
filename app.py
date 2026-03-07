@@ -5018,6 +5018,103 @@ def scrape_dokumentationszentrum() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Kunstraum Kreuzberg Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_kunstraumkreuzberg() -> list[dict]:
+    """Scraped Ausstellungen vom Kunstraum Kreuzberg/Bethanien."""
+    events = []
+    venue_name = "Kunstraum Kreuzberg/Bethanien"
+    venue_address = "Mariannenplatz 2, 10997 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.kunstraumkreuzberg.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.kunstraumkreuzberg.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[KunstraumKreuzberg] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for article in soup.select("article"):
+        try:
+            text = article.get_text(" ", strip=True)
+            link = article.select_one("a[href]")
+
+            if not link:
+                continue
+
+            href = link.get("href", "")
+
+            # Nur Ausstellungen mit Datum: "Echoes of Tumult 24.1. – 22.3.26"
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.\s*[–-]\s*(\d{1,2})\.(\d{1,2})\.(\d{2,4})", text)
+            if not date_match:
+                continue
+
+            # Start-Datum
+            start_day = int(date_match.group(1))
+            start_month = int(date_match.group(2))
+            # End-Datum für Jahr
+            end_day = int(date_match.group(3))
+            end_month = int(date_match.group(4))
+            year_str = date_match.group(5)
+            year = int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
+
+            try:
+                event_date = datetime(year, start_month, start_day)
+            except ValueError:
+                continue
+
+            # Vergangene überspringen (aber laufende Ausstellungen zeigen)
+            try:
+                end_date = datetime(year, end_month, end_day)
+                if end_date.date() < now.date():
+                    continue
+            except ValueError:
+                pass
+
+            # Titel: Alles vor dem Datum
+            title = text.split(str(start_day) + ".")[0].strip()
+            if not title or len(title) < 3:
+                continue
+
+            event_link = href if href.startswith("http") else f"https://www.kunstraumkreuzberg.de{href}"
+            event_id = hashlib.md5(f"kunstraumkreuzberg-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": "",
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": "ausstellung",
+                "description": "",
+                "link": event_link,
+                "source": "kunstraumkreuzberg",
+                "is_free": True,
+            })
+        except Exception:
+            continue
+
+    print(f"[KunstraumKreuzberg] {len(events)} Ausstellungen geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Futurium Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -5272,6 +5369,9 @@ def refresh_cache():
 
     # Dokumentationszentrum Flucht, Vertreibung, Versöhnung
     all_events.extend(scrape_dokumentationszentrum())
+
+    # Kunstraum Kreuzberg/Bethanien
+    all_events.extend(scrape_kunstraumkreuzberg())
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
