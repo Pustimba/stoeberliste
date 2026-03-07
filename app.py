@@ -2015,11 +2015,13 @@ def scrape_brotfabrik() -> list[dict]:
             # Beschreibung
             desc_match = re.search(r"DESCRIPTION:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
             description = ""
+            description_raw = ""  # Für is_free Check vor Bereinigung
             if desc_match:
                 description = desc_match.group(1).strip()
                 description = description.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
                 # Mehrzeilige Beschreibungen (Fortsetzungszeilen beginnen mit Leerzeichen)
                 description = re.sub(r"\r?\n ", "", description)
+                description_raw = description  # Vor Bereinigung speichern
 
                 # Termine und Filminfos am Anfang entfernen
                 # Suche nach echtem Satzanfang (Artikel + Wort)
@@ -2055,8 +2057,9 @@ def scrape_brotfabrik() -> list[dict]:
                         event_type = cat_type
                         break
 
-            # Kostenlos?
-            is_free = "eintritt frei" in description.lower() or "kostenlos" in description.lower()
+            # Kostenlos? (prüfe auf Rohdaten vor Bereinigung)
+            check_text = (description_raw or description).lower()
+            is_free = "eintritt frei" in check_text or "kostenlos" in check_text
 
             # UID fuer eindeutige ID
             uid_match = re.search(r"UID:(.+?)(?:\r?\n|\Z)", block)
