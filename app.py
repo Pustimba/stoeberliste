@@ -5299,6 +5299,307 @@ def scrape_zois() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LPB Berlin (Berliner Landeszentrale für politische Bildung) Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_lpb_berlin() -> list[dict]:
+    """Scraped Events von der Berliner Landeszentrale für politische Bildung."""
+    events = []
+    venue_name = "Berliner Landeszentrale für politische Bildung"
+    venue_address = "Hardenbergstraße 22-24, 10623 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="charlottenburg",
+        url="https://www.berlin.de/politische-bildung",
+    )
+
+    base_url = "https://www.berlin.de"
+    calendar_url = f"{base_url}/politische-bildung/veranstaltungen/veranstaltungen-der-berliner-landeszentrale/"
+
+    try:
+        resp = requests.get(
+            calendar_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[LPB Berlin] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    # Events aus den Autoteaser-Listen extrahieren
+    for li in soup.select(".modul-autoteaser ul.list--tablelist li"):
+        try:
+            # Datum
+            date_cell = li.select_one(".cell.date")
+            if not date_cell:
+                continue
+            date_str = date_cell.get_text(strip=True)  # z.B. "12.03.2026"
+            try:
+                event_date = datetime.strptime(date_str, "%d.%m.%Y")
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            # Titel und Link
+            link_tag = li.select_one(".cell.text a")
+            if not link_tag:
+                continue
+            title = link_tag.get_text(strip=True)
+            href = link_tag.get("href", "")
+            event_link = f"{base_url}{href}" if href.startswith("/") else href
+
+            # Beschreibung von Detailseite laden
+            description = ""
+            event_time = ""
+            event_address = venue_address
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=8,
+                )
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                # Beschreibung aus .textile p (berlin.de Struktur)
+                for p in detail_soup.select(".textile p, .modul-text p, .article-content p"):
+                    text = p.get_text(" ", strip=True)
+                    if len(text) > 80:
+                        # Ersten Satz nehmen wenn zu lang
+                        if len(text) > 250:
+                            sentences = re.split(r'(?<=[.!?])\s+', text)
+                            description = sentences[0] if sentences else text[:250]
+                        else:
+                            description = text
+                        break
+
+                # Uhrzeit aus Metadaten oder Text
+                time_match = re.search(r"(\d{1,2}[:.]\d{2})\s*(?:Uhr|–|-)", detail_resp.text)
+                if time_match:
+                    event_time = time_match.group(1).replace(".", ":")
+
+                # Ort aus Metadaten
+                location_tag = detail_soup.select_one(".location, .address, [itemprop='location']")
+                if location_tag:
+                    loc_text = location_tag.get_text(" ", strip=True)
+                    if len(loc_text) > 10:
+                        event_address = loc_text[:100]
+
+            except Exception:
+                pass
+
+            # Event-Typ bestimmen
+            title_lower = title.lower()
+            if "film" in title_lower or "kino" in title_lower:
+                event_type = "film"
+            elif "lesung" in title_lower:
+                event_type = "lesung"
+            elif "workshop" in title_lower or "seminar" in title_lower:
+                event_type = "workshop"
+            elif "führung" in title_lower or "rundgang" in title_lower:
+                event_type = "sonstiges"
+            elif "ausstellung" in title_lower:
+                event_type = "ausstellung"
+            else:
+                event_type = "diskussion"  # Default für politische Bildung
+
+            event_id = hashlib.md5(f"lpb-berlin-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": event_time,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": event_address,
+                "bezirk": "charlottenburg",
+                "type": event_type,
+                "description": description,
+                "link": event_link,
+                "source": "lpb-berlin",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        if e["link"] not in seen:
+            seen.add(e["link"])
+            unique.append(e)
+
+    print(f"[LPB Berlin] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BPB (Bundeszentrale für politische Bildung) Scraper - nur Berlin Events
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_bpb() -> list[dict]:
+    """Scraped Events von bpb.de via RSS-Feed, gefiltert auf Berlin."""
+    events = []
+    venue_name = "Bundeszentrale für politische Bildung"
+    venue_address = "Friedrichstraße 50, 10117 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.bpb.de",
+    )
+
+    rss_url = "https://www.bpb.de/rss-feed/133222.rss"
+
+    try:
+        resp = requests.get(
+            rss_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[BPB] Fehler beim Laden: {e}")
+        return []
+
+    rss_text = resp.text
+    now = datetime.now()
+
+    # RSS mit Regex parsen (BeautifulSoup HTML-Parser funktioniert nicht gut mit RSS)
+    item_pattern = re.compile(r"<item>(.*?)</item>", re.DOTALL)
+    title_pattern = re.compile(r"<title><!\[CDATA\[(.*?)\]\]></title>")
+    link_pattern = re.compile(r"<link>(https?://[^<]+)</link>")
+    pubdate_pattern = re.compile(r"<pubDate>([^<]+)</pubDate>")
+    desc_pattern = re.compile(r"<description><!\[CDATA\[(.*?)\]\]></description>")
+
+    for item_match in item_pattern.finditer(rss_text):
+        try:
+            item = item_match.group(1)
+
+            # Titel
+            title_m = title_pattern.search(item)
+            if not title_m:
+                continue
+            title = title_m.group(1)
+
+            # Link
+            link_m = link_pattern.search(item)
+            if not link_m:
+                continue
+            event_link = link_m.group(1)
+
+            # Beschreibung aus RSS
+            desc_m = desc_pattern.search(item)
+            rss_description = desc_m.group(1) if desc_m else ""
+
+            # Datum aus pubDate
+            pubdate_m = pubdate_pattern.search(item)
+            if not pubdate_m:
+                continue
+            pub_date_str = pubdate_m.group(1).strip()
+            # Format: "Thu, 26 Mar 2026 18:30:00 +0100"
+            try:
+                event_date = datetime.strptime(pub_date_str[:25], "%a, %d %b %Y %H:%M:%S")
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            time_str = event_date.strftime("%H:%M")
+
+            # Detailseite laden um Ort zu prüfen
+            is_berlin = False
+            description = rss_description
+            event_address = venue_address
+
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                detail_text = detail_resp.text.lower()
+
+                # Prüfen ob Berlin im Ort steht
+                if "berlin" in detail_text:
+                    # Genauer prüfen: Suche nach Adresse mit Berlin
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                    # Suche nach Ort-Metadaten
+                    for selector in [".event-location", ".location", "[itemprop='location']", ".place"]:
+                        loc = detail_soup.select_one(selector)
+                        if loc:
+                            loc_text = loc.get_text(" ", strip=True)
+                            if "berlin" in loc_text.lower():
+                                is_berlin = True
+                                event_address = loc_text[:150]
+                                break
+
+                    # Fallback: Suche im gesamten Text nach "Berlin" als Ort
+                    if not is_berlin:
+                        berlin_match = re.search(r"(\d{5}\s+Berlin|Berlin[,\s]+\d{5})", detail_resp.text)
+                        if berlin_match:
+                            is_berlin = True
+
+                    # Bessere Beschreibung von Detailseite
+                    intro = detail_soup.select_one(".intro, .teaser-text, .article-intro")
+                    if intro:
+                        description = intro.get_text(" ", strip=True)[:250]
+
+            except Exception:
+                pass
+
+            # Nur Berlin-Events speichern
+            if not is_berlin:
+                continue
+
+            # Event-Typ bestimmen
+            title_lower = title.lower()
+            if "film" in title_lower or "kino" in title_lower:
+                event_type = "film"
+            elif "lesung" in title_lower:
+                event_type = "lesung"
+            elif "workshop" in title_lower or "seminar" in title_lower:
+                event_type = "workshop"
+            elif "tagung" in title_lower or "kongress" in title_lower:
+                event_type = "diskussion"
+            else:
+                event_type = "diskussion"
+
+            event_id = hashlib.md5(f"bpb-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": event_address,
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": description,
+                "link": event_link,
+                "source": "bpb",
+            })
+        except Exception:
+            continue
+
+    print(f"[BPB] {len(events)} Berlin-Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Futurium Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -5559,6 +5860,12 @@ def refresh_cache():
 
     # ZOiS
     all_events.extend(scrape_zois())
+
+    # LPB Berlin
+    all_events.extend(scrape_lpb_berlin())
+
+    # BPB (nur Berlin-Events)
+    all_events.extend(scrape_bpb())
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
