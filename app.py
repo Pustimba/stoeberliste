@@ -3850,13 +3850,13 @@ def scrape_planetarium() -> list[dict]:
 
                     # Beschreibung extrahieren
                     description = ""
-                    intro = detail_soup.select_one(".field--name-field-intro, .field--name-body")
+                    # Planetarium nutzt field--name-field-body-wo-summary für Beschreibungen
+                    intro = detail_soup.select_one(".field--name-field-body-wo-summary, .field--name-field-intro, .field--name-body")
                     if intro:
                         description = intro.get_text(" ", strip=True)[:300]
 
-                    # Kostenlos prüfen
-                    page_text = detail_soup.get_text(" ", strip=True)
-                    is_free = _detect_free_event(page_text)
+                    # Planetarium-Events sind kostenpflichtig (Tickets 13-20€)
+                    is_free = False
 
                     # Alle Termine aus event-date Artikeln extrahieren
                     for date_article in detail_soup.select("article.event-date"):
