@@ -78,7 +78,7 @@ VERANSTALTER = {
     "peter-edel": {"name": "Peter Edel", "url": "https://www.peteredel.de"},
     "kubiz-wallenberg": {"name": "KuBiZ Wallenberg", "url": "https://www.kubiz-wallenberg.de"},
     "zeiss-grossplanetarium": {"name": "Zeiss-Großplanetarium", "url": "https://www.planetarium.berlin"},
-    "futurium": {"name": "Futurium", "url": "https://futurium.de"},
+    # "futurium": {"name": "Futurium", "url": "https://futurium.de"},  # PDF-Scraper noch nicht fertig
 }
 
 
@@ -298,7 +298,7 @@ VERANSTALTER_SOURCE_MAP = {
     "peter-edel": "peteredel",
     "kubiz-wallenberg": "kubiz",
     "zeiss-grossplanetarium": "planetarium",
-    "futurium": "futurium",
+    # "futurium": "futurium",  # PDF-Scraper noch nicht fertig
 }
 
 
@@ -4109,8 +4109,8 @@ def refresh_cache():
     # Zeiss-Großplanetarium
     all_events.extend(scrape_planetarium())
 
-    # Futurium
-    all_events.extend(scrape_futurium())
+    # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
+    # all_events.extend(scrape_futurium())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
