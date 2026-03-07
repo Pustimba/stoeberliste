@@ -77,6 +77,8 @@ VERANSTALTER = {
     "cinema-surreal": {"name": "Cinema Surreal", "url": "https://cinemasurreal.de"},
     "peter-edel": {"name": "Peter Edel", "url": "https://www.peteredel.de"},
     "kubiz-wallenberg": {"name": "KuBiZ Wallenberg", "url": "https://www.kubiz-wallenberg.de"},
+    "zeiss-grossplanetarium": {"name": "Zeiss-Großplanetarium", "url": "https://www.planetarium.berlin"},
+    "futurium": {"name": "Futurium", "url": "https://futurium.de"},
 }
 
 
@@ -295,6 +297,8 @@ VERANSTALTER_SOURCE_MAP = {
     "cinema-surreal": "cinemasurreal",
     "peter-edel": "peteredel",
     "kubiz-wallenberg": "kubiz",
+    "zeiss-grossplanetarium": "planetarium",
+    "futurium": "futurium",
 }
 
 
@@ -3694,6 +3698,334 @@ def scrape_kubiz() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Zeiss-Großplanetarium Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_planetarium() -> list[dict]:
+    """Scraped Events von planetarium.berlin.
+
+    Holt Lesungen/Hörspiele aus dem Programm (Erwachsene).
+    """
+    events = []
+    venue_name = "Zeiss-Großplanetarium"
+    venue_address = "Prenzlauer Allee 80, 10405 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="prenzlauer-berg",
+        url="https://www.planetarium.berlin",
+    )
+
+    # Nur Lesungen/Hörspiele scrapen (passt zum Profil)
+    categories = [
+        ("hoerspiele-lesungen", "lesung"),
+    ]
+
+    # Kinderveranstaltungen überspringen
+    BLOCKED_KEYWORDS = [
+        "kinder", "kids", "ohrka", "familie", "traumzauberbaum",
+        "ab 4 jahren", "ab 5 jahren", "ab 6 jahren", "ab 7 jahren", "ab 8 jahren",
+    ]
+
+    for cat_slug, event_type in categories:
+        try:
+            resp = requests.get(
+                f"https://www.planetarium.berlin/veranstaltungsart/{cat_slug}",
+                headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[Planetarium] Fehler beim Laden {cat_slug}: {e}")
+            continue
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events sind in article.event-page Elementen
+        for article in soup.select("article.event-page"):
+            try:
+                link = article.select_one("a[href]")
+                if not link:
+                    continue
+
+                href = link.get("href", "")
+                if not href or "/veranstaltungsart/" in href:
+                    continue
+
+                event_link = f"https://www.planetarium.berlin{href}" if href.startswith("/") else href
+
+                # Titel aus h4 oder Link-Text
+                title_elem = article.select_one("h4 span")
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                else:
+                    title = link.get_text(strip=True)
+
+                if not title or len(title) < 3:
+                    continue
+
+                # Infos holen (z.B. "50 min | ab 4 Jahren")
+                info_elem = article.select_one(".event__info, .field--name-field-infos")
+                info_text = info_elem.get_text(strip=True) if info_elem else ""
+
+                # Kinderveranstaltungen überspringen
+                combined_text = f"{title} {info_text}".lower()
+                if any(kw in combined_text for kw in BLOCKED_KEYWORDS):
+                    continue
+
+                # Event-Detailseite für Termine laden
+                try:
+                    detail_resp = requests.get(
+                        event_link,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                        timeout=15,
+                    )
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                    # Beschreibung extrahieren
+                    description = ""
+                    intro = detail_soup.select_one(".field--name-field-intro, .field--name-body")
+                    if intro:
+                        description = intro.get_text(" ", strip=True)[:300]
+
+                    # Kostenlos prüfen
+                    page_text = detail_soup.get_text(" ", strip=True)
+                    is_free = _detect_free_event(page_text)
+
+                    # Alle Termine aus event-date Artikeln extrahieren
+                    for date_article in detail_soup.select("article.event-date"):
+                        try:
+                            # Datum aus data-event-time Attribut des Ticket-Buttons
+                            ticket_btn = date_article.select_one("a[data-event-time]")
+                            if ticket_btn:
+                                dt_str = ticket_btn.get("data-event-time", "")
+                                # Format: 2026-03-07T12:30:00
+                                if dt_str:
+                                    event_datetime = datetime.fromisoformat(dt_str)
+                                    time_str = event_datetime.strftime("%H:%M")
+                            else:
+                                # Fallback: Datum aus Text
+                                date_cell = date_article.select_one(".event-date__table-cell")
+                                if not date_cell:
+                                    continue
+                                date_text = date_cell.get_text(" ", strip=True)
+                                # Format: "Sa 07.03.2026"
+                                date_match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", date_text)
+                                if not date_match:
+                                    continue
+                                day = int(date_match.group(1))
+                                month = int(date_match.group(2))
+                                year = int(date_match.group(3))
+                                event_datetime = datetime(year, month, day)
+
+                                # Zeit aus zweiter Zelle
+                                time_cells = date_article.select(".event-date__table-cell")
+                                time_str = ""
+                                if len(time_cells) >= 2:
+                                    time_text = time_cells[1].get_text(strip=True)
+                                    time_match = re.search(r"(\d{1,2}):(\d{2})", time_text)
+                                    if time_match:
+                                        time_str = f"{time_match.group(1)}:{time_match.group(2)}"
+
+                            # Nur zukünftige Events
+                            if event_datetime.date() < datetime.now().date():
+                                continue
+
+                            # Venue aus dritter Zelle (kann variieren)
+                            location_elem = date_article.select_one(".field-location a")
+                            if location_elem:
+                                loc_name = location_elem.get_text(strip=True)
+                                if "Zeiss-Großplanetarium" in loc_name:
+                                    ev_venue = venue_name
+                                    ev_address = venue_address
+                                else:
+                                    # Andere Stiftungsorte überspringen (Archenhold, etc.)
+                                    continue
+                            else:
+                                ev_venue = venue_name
+                                ev_address = venue_address
+
+                            event_id = hashlib.md5(
+                                f"planetarium-{event_link}-{event_datetime.isoformat()}".encode()
+                            ).hexdigest()[:12]
+
+                            events.append({
+                                "id": event_id,
+                                "title": title,
+                                "date": event_datetime,
+                                "time": time_str,
+                                "venue_slug": venue_slug,
+                                "venue_name": ev_venue,
+                                "venue_address": ev_address,
+                                "bezirk": "prenzlauer-berg",
+                                "type": event_type,
+                                "description": description,
+                                "link": event_link,
+                                "source": "planetarium",
+                                "is_free": is_free,
+                            })
+
+                        except Exception:
+                            continue
+
+                except Exception:
+                    continue
+
+            except Exception:
+                continue
+
+    print(f"[Planetarium] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Futurium Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_futurium() -> list[dict]:
+    """Scraped Events von futurium.de.
+
+    Die Website ist React-basiert und erfordert PDF-Parsing.
+    Benoetigt pdfplumber: pip install pdfplumber
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        print("[Futurium] pdfplumber nicht installiert - ueberspringe (pip install pdfplumber)")
+        return []
+
+    import io
+
+    events = []
+    venue_name = "Futurium"
+    venue_address = "Alexanderufer 2, 10117 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://futurium.de",
+    )
+
+    # Versuche aktuelle Programmflyer-URL zu finden
+    # Das Futurium benennt sie nach Quartal: JAN-MAR, APR-JUN, etc.
+    now = datetime.now()
+    quarter_starts = [(1, "JAN-MAR"), (4, "APR-JUN"), (7, "JUL-SEP"), (10, "OKT-DEZ")]
+    current_quarter = None
+    for month, name in reversed(quarter_starts):
+        if now.month >= month:
+            current_quarter = name
+            break
+    if not current_quarter:
+        current_quarter = "OKT-DEZ"
+
+    year_short = str(now.year)[2:]
+    pdf_url = f"https://futurium.de/uploads/documents/FUT_Programmflyer_{current_quarter}{year_short}_WEB.pdf"
+
+    try:
+        resp = requests.get(
+            pdf_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Futurium] PDF nicht gefunden ({pdf_url}): {e}")
+        return []
+
+    try:
+        pdf_bytes = io.BytesIO(resp.content)
+        with pdfplumber.open(pdf_bytes) as pdf:
+            full_text = ""
+            for page in pdf.pages:
+                full_text += page.extract_text() or ""
+
+        # Events aus Text extrahieren (Format: "DD. MON HH:MM Titel")
+        event_pattern = re.compile(
+            r"(\d{1,2})\.\s*(JAN|FEB|MAR|APR|MAI|JUN|JUL|AUG|SEP|OKT|NOV|DEZ)\s+"
+            r"(\d{1,2})[:\.](\d{2})\s*"
+            r"([A-Z][^\n]{10,})",
+            re.IGNORECASE
+        )
+
+        month_map = {
+            "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAI": 5,
+            "JUN": 6, "JUL": 7, "AUG": 8, "SEP": 9, "OKT": 10, "NOV": 11, "DEZ": 12
+        }
+
+        # Events filtern (keine Familien/Kinder-Events)
+        SKIP_KEYWORDS = ["family", "familie", "kinder", "kids", "fuehrung"]
+
+        for match in event_pattern.finditer(full_text):
+            try:
+                day = int(match.group(1))
+                month_name = match.group(2).upper()
+                hour = int(match.group(3))
+                minute = int(match.group(4))
+                title = match.group(5).strip()
+
+                # Titel bereinigen
+                title = re.sub(r'\s+', ' ', title)
+                if len(title) > 100:
+                    title = title[:100]
+
+                # Kinder/Familien-Events skippen
+                if any(kw in title.lower() for kw in SKIP_KEYWORDS):
+                    continue
+
+                month = month_map.get(month_name, 0)
+                if not month:
+                    continue
+
+                year = now.year
+                event_date = datetime(year, month, day, hour, minute)
+                if event_date < now:
+                    event_date = datetime(year + 1, month, day, hour, minute)
+
+                if event_date.date() < now.date():
+                    continue
+
+                event_id = hashlib.md5(
+                    f"futurium-{title}-{event_date.isoformat()}".encode()
+                ).hexdigest()[:12]
+
+                # Typ bestimmen
+                title_lower = title.lower()
+                if "quiz" in title_lower:
+                    event_type = "sonstiges"
+                elif "talk" in title_lower or "diskussion" in title_lower:
+                    event_type = "diskussion"
+                elif "open lab" in title_lower or "workshop" in title_lower:
+                    event_type = "workshop"
+                else:
+                    event_type = "vortrag"
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "mitte",
+                    "type": event_type,
+                    "description": "",
+                    "link": "https://futurium.de/de/veranstaltungen",
+                    "source": "futurium",
+                    "is_free": True,
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Futurium] Fehler beim PDF-Parsen: {e}")
+
+    print(f"[Futurium] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3773,6 +4105,12 @@ def refresh_cache():
 
     # KuBiZ Wallenberg
     all_events.extend(scrape_kubiz())
+
+    # Zeiss-Großplanetarium
+    all_events.extend(scrape_planetarium())
+
+    # Futurium
+    all_events.extend(scrape_futurium())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
