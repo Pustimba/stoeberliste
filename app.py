@@ -1652,19 +1652,62 @@ def scrape_acud() -> list[dict]:
 
             event_link = href if href.startswith("http") else f"https://acudmachtneu.de{href}"
 
+            # Detailseite für Uhrzeit und Beschreibung laden
+            time_str = ""
+            description = ""
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+
+                # Beschreibung aus article p Tags
+                paragraphs = detail_soup.select("article p")
+                desc_parts = []
+                for p in paragraphs:
+                    p_text = p.get_text(" ", strip=True)
+                    if p_text and len(p_text) > 20:
+                        desc_parts.append(p_text)
+                if desc_parts:
+                    description = " ".join(desc_parts)[:300]
+
+                # Uhrzeit aus Beschreibung extrahieren (z.B. "20H", "8pm", "20:00")
+                page_text = detail_soup.get_text(" ", strip=True)
+                time_match = re.search(r"(\d{1,2})[Hh](?:\s|,|$)", page_text)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    time_str = f"{hour:02d}:00"
+                else:
+                    time_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*[Uu]hr", page_text)
+                    if time_match:
+                        hour = int(time_match.group(1))
+                        minute = int(time_match.group(2)) if time_match.group(2) else 0
+                        time_str = f"{hour:02d}:{minute:02d}"
+                    else:
+                        time_match = re.search(r"(\d{1,2})\s*pm", page_text.lower())
+                        if time_match:
+                            hour = int(time_match.group(1)) + 12
+                            if hour == 24:
+                                hour = 12
+                            time_str = f"{hour:02d}:00"
+            except Exception:
+                pass
+
             event_id = hashlib.md5(f"acud-{event_link}".encode()).hexdigest()[:12]
 
             events.append({
                 "id": event_id,
                 "title": title,
                 "date": event_date,
-                "time": "",
+                "time": time_str,
                 "venue_slug": venue_slug,
                 "venue_name": venue_name,
                 "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": event_type,
-                "description": "",
+                "description": description,
                 "link": event_link,
                 "source": "acud",
             })
