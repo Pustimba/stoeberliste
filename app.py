@@ -1931,7 +1931,7 @@ def _fetch_brotfabrik_details(url: str) -> dict:
 
 
 def scrape_brotfabrik() -> list[dict]:
-    """Scraped Events von brotfabrik-berlin.de."""
+    """Scraped Events von brotfabrik-berlin.de via iCal-Feed."""
     events = []
     venue_name = "Brotfabrik"
     venue_address = "Caligariplatz 1, 13086 Berlin"
@@ -1942,9 +1942,10 @@ def scrape_brotfabrik() -> list[dict]:
         url="https://brotfabrik-berlin.de",
     )
 
+    # iCal-Feed nutzen (zuverlaessiger als HTML-Scraping)
     try:
         resp = requests.get(
-            "https://brotfabrik-berlin.de/",
+            "https://brotfabrik-berlin.de/veranstaltungen/?ical=1",
             headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
             timeout=30,
         )
@@ -1953,49 +1954,79 @@ def scrape_brotfabrik() -> list[dict]:
         print(f"[Brotfabrik] Fehler beim Laden: {e}")
         return []
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    current_year = datetime.now().year
+    # Kategorien-Mapping
+    category_map = {
+        "kino": "film",
+        "buehne": "theater",
+        "bühne": "theater",
+        "galerie": "ausstellung",
+        "ausstellung": "ausstellung",
+        "literatur": "lesung",
+        "kneipe": "sonstiges",
+    }
 
-    for article in soup.select("article, .event-item, .programm-item"):
+    now = datetime.now()
+    ical_text = resp.text
+
+    # VEVENT-Bloecke parsen
+    vevent_pattern = re.compile(r"BEGIN:VEVENT(.*?)END:VEVENT", re.DOTALL)
+
+    for match in vevent_pattern.finditer(ical_text):
         try:
-            title_elem = article.select_one("h2 a, h3 a, .title a")
-            if not title_elem:
+            block = match.group(1)
+
+            # Titel
+            summary_match = re.search(r"SUMMARY:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
+            if not summary_match:
+                continue
+            title = summary_match.group(1).strip()
+            # iCal-Escaping rueckgaengig machen
+            title = title.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
+
+            # Datum/Zeit
+            dtstart_match = re.search(r"DTSTART(?:;[^:]+)?:(\d{8}T\d{6})", block)
+            if not dtstart_match:
+                continue
+            dt_str = dtstart_match.group(1)
+            event_date = datetime.strptime(dt_str, "%Y%m%dT%H%M%S")
+
+            # Nur zukuenftige Events
+            if event_date.date() < now.date():
                 continue
 
-            title = title_elem.get_text(strip=True)
-            if not title or len(title) < 3:
-                continue
+            time_str = event_date.strftime("%H:%M")
 
-            href = title_elem.get("href", "")
-            event_link = href if href.startswith("http") else f"https://brotfabrik-berlin.de{href}"
+            # URL
+            url_match = re.search(r"URL:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
+            event_link = url_match.group(1).strip() if url_match else "https://brotfabrik-berlin.de"
 
-            text = article.get_text(" ", strip=True)
+            # Beschreibung
+            desc_match = re.search(r"DESCRIPTION:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
+            description = ""
+            if desc_match:
+                description = desc_match.group(1).strip()
+                description = description.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
+                # Mehrzeilige Beschreibungen (Fortsetzungszeilen beginnen mit Leerzeichen)
+                description = re.sub(r"\r?\n ", "", description)
+                description = description[:300]
 
-            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", text)
-            if not date_match:
-                continue
+            # Kategorie
+            cat_match = re.search(r"CATEGORIES:(.+?)(?:\r?\n(?! )|\Z)", block, re.DOTALL)
+            event_type = "sonstiges"
+            if cat_match:
+                categories = cat_match.group(1).strip().lower()
+                for cat_key, cat_type in category_map.items():
+                    if cat_key in categories:
+                        event_type = cat_type
+                        break
 
-            day = int(date_match.group(1))
-            month = int(date_match.group(2))
-            year = int(date_match.group(3)) if date_match.group(3) else current_year
+            # Kostenlos?
+            is_free = "eintritt frei" in description.lower() or "kostenlos" in description.lower()
 
-            try:
-                event_date = datetime(year, month, day)
-            except ValueError:
-                continue
-
-            time_match = re.search(r"(\d{1,2}):(\d{2})", text)
-            time_str = f"{time_match.group(1)}:{time_match.group(2)}" if time_match else ""
-
-            # Fetch details from event page
-            details = _fetch_brotfabrik_details(event_link)
-            description = details.get("description", "")
-            is_free = details.get("is_free", False)
-
-            # Event-Typ: Nutze Kategorie von Detailseite oder klassifiziere
-            event_type = details.get("category") or _classify_event_type(title, text + " " + description)
-
-            event_id = hashlib.md5(f"brotfabrik-{event_link}".encode()).hexdigest()[:12]
+            # UID fuer eindeutige ID
+            uid_match = re.search(r"UID:(.+?)(?:\r?\n|\Z)", block)
+            uid = uid_match.group(1).strip() if uid_match else event_link
+            event_id = hashlib.md5(f"brotfabrik-{uid}".encode()).hexdigest()[:12]
 
             events.append({
                 "id": event_id,
