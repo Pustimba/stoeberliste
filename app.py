@@ -4547,6 +4547,477 @@ def scrape_jmberlin() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# nGbK Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_ngbk() -> list[dict]:
+    """Scraped Events von nGbK (neue Gesellschaft für bildende Kunst)."""
+    events = []
+    venue_name = "nGbK"
+    venue_address = "Oranienstraße 25, 10999 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.ngbk.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.ngbk.de/de/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[nGbK] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for teaser in soup.select(".teaser"):
+        try:
+            link = teaser.select_one("a[href]")
+            if not link:
+                continue
+
+            href = link.get("href", "")
+            text = teaser.get_text(" ", strip=True)
+
+            # Titel: Erster Teil
+            title = text.split(" Sa,")[0].split(" So,")[0].split(" Fr,")[0].split(" Do,")[0].split(" Mi,")[0].split(" Di,")[0].split(" Mo,")[0].strip()
+            if not title or len(title) < 5:
+                continue
+
+            # Datum: "Sa, 28.3. – So, 28.6.26" -> Start-Datum
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(?:\s*–[^,]+,\s*\d{1,2}\.\d{1,2}\.)?(\d{2,4})?", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year_str = date_match.group(3)
+            if year_str:
+                year = int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
+            else:
+                year = now.year
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            # Vergangene Events überspringen
+            if event_date.date() < now.date():
+                continue
+
+            # Event-Typ
+            text_lower = text.lower()
+            if "ausstellung" in text_lower:
+                event_type = "ausstellung"
+            elif "buchpräsentation" in text_lower or "lesung" in text_lower:
+                event_type = "lesung"
+            elif "workshop" in text_lower:
+                event_type = "workshop"
+            elif "film" in text_lower:
+                event_type = "film"
+            else:
+                event_type = "ausstellung"
+
+            event_link = href if href.startswith("http") else f"https://www.ngbk.de{href}"
+            event_id = hashlib.md5(f"ngbk-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": "",
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "ngbk",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        if e["link"] not in seen:
+            seen.add(e["link"])
+            unique.append(e)
+
+    print(f"[nGbK] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anne Frank Zentrum Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_annefrank() -> list[dict]:
+    """Scraped Events vom Anne Frank Zentrum."""
+    events = []
+    venue_name = "Anne Frank Zentrum"
+    venue_address = "Rosenthaler Straße 39, 10178 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.annefrank.de",
+    )
+
+    # Nur Veranstaltungen in Berlin, keine Wanderausstellungen oder Führungen
+    BLOCKED_KEYWORDS = [
+        "neuruppin", "wanderausstellung", "erfurt", "leipzig", "hamburg",
+        "münchen", "köln", "frankfurt", "düsseldorf", "schulprojekt",
+        "weimar", "arnsberg", "führung", "familienführung", "tandemführung",
+    ]
+
+    try:
+        resp = requests.get(
+            "https://www.annefrank.de/termine",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[AnneFrank] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for teaser in soup.select(".teaser"):
+        try:
+            link = teaser.select_one("a[href]")
+            text = teaser.get_text(" ", strip=True)
+
+            # Filter: Nur Berlin
+            text_lower = text.lower()
+            if any(kw in text_lower for kw in BLOCKED_KEYWORDS):
+                continue
+
+            # Datum: "11. 02. 2026 - 09. 03. 2026"
+            date_match = re.search(r"(\d{1,2})\.\s*(\d{2})\.\s*(\d{4})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3))
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Titel: Nach Datum
+            title_match = re.search(r"\d{4}\s+(.+?)(?:Das Anne Frank|$)", text)
+            title = title_match.group(1).strip() if title_match else ""
+            if not title or len(title) < 5:
+                continue
+
+            href = link.get("href", "") if link else ""
+            event_link = href if href.startswith("http") else f"https://www.annefrank.de{href}"
+            event_id = hashlib.md5(f"annefrank-{event_link}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": "",
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "mitte",
+                "type": "ausstellung",
+                "description": "",
+                "link": event_link,
+                "source": "annefrank",
+            })
+        except Exception:
+            continue
+
+    print(f"[AnneFrank] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Haus am Waldsee Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_hausamwaldsee() -> list[dict]:
+    """Scraped Events vom Haus am Waldsee."""
+    events = []
+    venue_name = "Haus am Waldsee"
+    venue_address = "Argentinische Allee 30, 14163 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="zehlendorf",
+        url="https://www.hausamwaldsee.de",
+    )
+
+    # Kinder/Familien-Events ausfiltern
+    BLOCKED_KEYWORDS = [
+        "kinder", "familien", "familiensonntag", "workshop für kinder",
+        "führung", "ausverkauft",
+    ]
+
+    try:
+        resp = requests.get(
+            "https://www.hausamwaldsee.de/programm/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[HausWaldsee] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for event_elem in soup.select('[class*="event"]'):
+        try:
+            text = event_elem.get_text(" ", strip=True)
+            link = event_elem.select_one("a[href]")
+
+            # Filter
+            text_lower = text.lower()
+            if any(kw in text_lower for kw in BLOCKED_KEYWORDS):
+                continue
+
+            # Datum: "So, 8.3.2026"
+            date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+            if not date_match:
+                continue
+
+            day = int(date_match.group(1))
+            month = int(date_match.group(2))
+            year = int(date_match.group(3))
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Titel: Nach Datum
+            title_match = re.search(r"\d{4}\s+(.+)", text)
+            title = title_match.group(1).strip() if title_match else ""
+            if not title or len(title) < 5:
+                continue
+
+            # Zeit
+            time_str = ""
+            time_match = re.search(r"(\d{1,2})[:\.](\d{2})\s*Uhr", text)
+            if time_match:
+                time_str = f"{int(time_match.group(1)):02d}:{time_match.group(2)}"
+
+            # Event-Typ
+            if "konzert" in text_lower:
+                event_type = "konzert"
+            elif "lesung" in text_lower or "gespräch" in text_lower:
+                event_type = "lesung"
+            elif "film" in text_lower:
+                event_type = "film"
+            else:
+                event_type = "ausstellung"
+
+            href = link.get("href", "") if link else "https://www.hausamwaldsee.de/programm/"
+            event_link = href if href.startswith("http") else f"https://www.hausamwaldsee.de{href}"
+            event_id = hashlib.md5(f"hausamwaldsee-{title}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title[:100],
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "zehlendorf",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "hausamwaldsee",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        key = f"{e['title']}-{e['date'].isoformat()}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+
+    print(f"[HausWaldsee] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dokumentationszentrum Flucht, Vertreibung, Versöhnung Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENGLISH_MONTHS_FULL = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def scrape_dokumentationszentrum() -> list[dict]:
+    """Scraped Events vom Dokumentationszentrum Flucht, Vertreibung, Versöhnung."""
+    events = []
+    venue_name = "Dokumentationszentrum Flucht, Vertreibung, Versöhnung"
+    venue_address = "Stresemannstraße 90, 10963 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="kreuzberg",
+        url="https://www.flucht-vertreibung-versoehnung.de",
+    )
+
+    # Führungen ausfiltern
+    BLOCKED_KEYWORDS = ["guided tour", "führung"]
+
+    try:
+        resp = requests.get(
+            "https://www.flucht-vertreibung-versoehnung.de/de/besuchen/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[DokuZentrum] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    for article in soup.select("article"):
+        try:
+            text = article.get_text(" ", strip=True)
+            link = article.select_one("a[href]")
+
+            # Filter
+            text_lower = text.lower()
+            if any(kw in text_lower for kw in BLOCKED_KEYWORDS):
+                continue
+
+            # Englisches Datum: "Saturday, March 07, 2026"
+            date_match = re.search(
+                r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})",
+                text, re.IGNORECASE
+            )
+            if not date_match:
+                continue
+
+            month_name = date_match.group(1).lower()
+            month = ENGLISH_MONTHS_FULL.get(month_name, 0)
+            day = int(date_match.group(2))
+            year = int(date_match.group(3))
+
+            if not month:
+                continue
+
+            try:
+                event_date = datetime(year, month, day)
+            except ValueError:
+                continue
+
+            if event_date.date() < now.date():
+                continue
+
+            # Zeit: "2:00 – 5:00 PM" oder "6:30 – 8:00 PM"
+            time_str = ""
+            time_match = re.search(r"(\d{1,2}):(\d{2})\s*(?:–|-)?\s*\d*:?\d*\s*(AM|PM)", text, re.IGNORECASE)
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2))
+                ampm = time_match.group(3).upper()
+                if ampm == "PM" and hour != 12:
+                    hour += 12
+                elif ampm == "AM" and hour == 12:
+                    hour = 0
+                time_str = f"{hour:02d}:{minute:02d}"
+
+            # Titel: Eventtyp + Titel
+            # "book presentation and conversation Tuesday, March 24, 2026, 6:30 – 8:00 PM „Alte Wut" by Caro Matzko"
+            title_match = re.search(r"(?:PM|AM)\s+(.+)", text)
+            title = title_match.group(1).strip() if title_match else ""
+            if not title:
+                # Fallback: Erster Teil
+                title_match = re.search(r"^([^\d]+)", text)
+                title = title_match.group(1).strip() if title_match else ""
+
+            if not title or len(title) < 5:
+                continue
+
+            # Event-Typ
+            if "workshop" in text_lower:
+                event_type = "workshop"
+            elif "book presentation" in text_lower or "buchpräsentation" in text_lower:
+                event_type = "lesung"
+            elif "film" in text_lower:
+                event_type = "film"
+            elif "conversation" in text_lower or "gespräch" in text_lower:
+                event_type = "diskussion"
+            else:
+                event_type = "diskussion"
+
+            href = link.get("href", "") if link else ""
+            event_link = href if href.startswith("http") else f"https://www.flucht-vertreibung-versoehnung.de{href}"
+            event_id = hashlib.md5(f"dokuzentrum-{title}-{event_date.isoformat()}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title[:100],
+                "date": event_date,
+                "time": time_str,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": venue_address,
+                "bezirk": "kreuzberg",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "dokumentationszentrum",
+                "is_free": True,  # Eintritt frei
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        key = f"{e['title']}-{e['date'].isoformat()}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+
+    print(f"[DokuZentrum] {len(unique)} Events geladen")
+    return unique
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Futurium Scraper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4788,6 +5259,19 @@ def refresh_cache():
 
     # Jüdisches Museum Berlin
     all_events.extend(scrape_jmberlin())
+
+    # nGbK (neue Gesellschaft für bildende Kunst)
+    all_events.extend(scrape_ngbk())
+
+    # Anne Frank Zentrum
+    # Anne Frank Zentrum (nur Führungen/Wanderausstellungen, keine passenden Events)
+    # all_events.extend(scrape_annefrank())
+
+    # Haus am Waldsee
+    all_events.extend(scrape_hausamwaldsee())
+
+    # Dokumentationszentrum Flucht, Vertreibung, Versöhnung
+    all_events.extend(scrape_dokumentationszentrum())
 
     # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
     # all_events.extend(scrape_futurium())
