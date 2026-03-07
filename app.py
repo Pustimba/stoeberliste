@@ -451,12 +451,17 @@ def scrape_stressfaktor() -> list[dict]:
 
     # Nur diese Venues von Stressfaktor scrapen (lowercase für Vergleich)
     # Venues mit eigenem Scraper (wie Baiz) werden hier ausgeschlossen
+    # Venue-Aliase: Stressfaktor-Namen -> kanonische Namen
+    VENUE_ALIASES = {
+        "kubiz": "kubiz-wallenberg",
+    }
+
     ALLOWED_VENUES = {
-        "kubiz": {
-            "name": "KuBiZ",
+        "kubiz-wallenberg": {
+            "name": "KuBiZ Wallenberg",
             "adresse": "Bernkasteler Straße 78, 13088 Berlin",
             "bezirk": "weissensee",
-            "url": "https://kubiz-wallenberg.de",
+            "url": "https://www.kubiz-wallenberg.de",
         },
         "k19": {
             "name": "K19",
@@ -518,8 +523,11 @@ def scrape_stressfaktor() -> list[dict]:
 
         # Ort zuerst prüfen (Filter!)
         venue_elem = elem.select_one(".views-field-nothing a")
-        venue_name = venue_elem.get_text(strip=True) if venue_elem else "Unbekannt"
-        venue_key = venue_name.lower()
+        venue_name_raw = venue_elem.get_text(strip=True) if venue_elem else "Unbekannt"
+        venue_key = venue_name_raw.lower()
+
+        # Aliase anwenden (z.B. "kubiz" -> "kubiz-wallenberg")
+        venue_key = VENUE_ALIASES.get(venue_key, venue_key)
 
         # Nur erlaubte Venues
         if venue_key not in ALLOWED_VENUES:
@@ -573,6 +581,9 @@ def scrape_stressfaktor() -> list[dict]:
         # Event-ID generieren
         event_id = hashlib.md5(f"{link}{current_date.isoformat()}".encode()).hexdigest()[:12]
 
+        # Link: Wenn Venue eigene Website hat, diese bevorzugen
+        event_link = venue_info.get("url") or link
+
         events.append({
             "id": event_id,
             "title": title,
@@ -583,7 +594,7 @@ def scrape_stressfaktor() -> list[dict]:
             "bezirk": venue_info["bezirk"],
             "type": event_type,
             "description": description,
-            "link": link,
+            "link": event_link,
             "source": "stressfaktor",
         })
 
