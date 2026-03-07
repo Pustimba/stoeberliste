@@ -6053,6 +6053,168 @@ def scrape_mmz() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Renaissance-Theater Berlin Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_renaissance_theater() -> list[dict]:
+    """Scraped Events vom Renaissance-Theater Berlin.
+
+    Nur Specials: Lesungen, Gespräche, Poetry Slam, Sonderveranstaltungen.
+    Reguläres Theaterprogramm wird ignoriert.
+    """
+    events = []
+    venue_name = "Renaissance-Theater"
+    venue_address = "Knesebeckstraße 100, 10623 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="charlottenburg-wilmersdorf",
+        url="https://renaissance-theater.de",
+    )
+
+    url = "https://renaissance-theater.de/spielplan/"
+    now = datetime.now()
+
+    # Kategorien die wir wollen
+    WANTED_CATEGORIES = {"lesung", "gespräch", "poetry slam", "sonderveranstaltung"}
+
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Aktueller Monat/Jahr für Datumsberechnung
+        current_month = None
+        current_year = now.year
+
+        month_map = {
+            "Januar": 1, "Februar": 2, "März": 3, "April": 4,
+            "Mai": 5, "Juni": 6, "Juli": 7, "August": 8,
+            "September": 9, "Oktober": 10, "November": 11, "Dezember": 12
+        }
+
+        # Alle Monatsüberschriften und Events durchgehen
+        for element in soup.select("h1, div.rt-spielplan-day"):
+            # Monatsüberschrift (h1 nicht h2)
+            if element.name == "h1":
+                month_text = element.get_text(strip=True)
+                if month_text in month_map:
+                    current_month = month_map[month_text]
+                    # Jahr anpassen wenn Monat in der Vergangenheit
+                    if current_month < now.month:
+                        current_year = now.year + 1
+                continue
+
+            if not current_month:
+                continue
+
+            # Event-Tag
+            day_elem = element.select_one(".rt-sp-day")
+            if not day_elem:
+                continue
+
+            try:
+                day = int(day_elem.get_text(strip=True))
+            except ValueError:
+                continue
+
+            # Alle Events an diesem Tag
+            for event_div in element.select(".rt-sp-date"):
+                try:
+                    # Kategorie prüfen
+                    special_div = event_div.select_one(".special-premiere")
+                    if not special_div:
+                        continue
+
+                    category = special_div.get_text(strip=True).lower()
+                    if category not in WANTED_CATEGORIES:
+                        continue
+
+                    # Zeit
+                    time_elem = event_div.select_one(".rt-sp-time")
+                    if not time_elem:
+                        continue
+                    time_text = time_elem.get_text(strip=True)
+                    time_match = re.match(r"(\d{1,2})\.(\d{2})", time_text)
+                    if time_match:
+                        hour, minute = int(time_match.group(1)), int(time_match.group(2))
+                    else:
+                        hour, minute = 19, 30
+
+                    # Titel
+                    title_elem = event_div.select_one("h4")
+                    if not title_elem:
+                        continue
+                    title = title_elem.get_text(" ", strip=True)
+                    # Span mit Zusatzinfo entfernen
+                    span = title_elem.select_one("span")
+                    if span:
+                        title = title.replace(span.get_text(" ", strip=True), "").strip()
+
+                    if not title:
+                        continue
+
+                    # Link
+                    link_elem = event_div.select_one("a[href*='/produktion/']")
+                    if link_elem:
+                        event_link = link_elem.get("href", "")
+                    else:
+                        event_link = url
+
+                    # Beschreibung
+                    desc_elem = event_div.select_one("p")
+                    description = desc_elem.get_text(strip=True) if desc_elem else ""
+
+                    # Datum zusammenbauen
+                    event_date = datetime(current_year, current_month, day, hour, minute)
+                    if event_date.date() < now.date():
+                        continue
+
+                    time_str = f"{hour:02d}:{minute:02d}"
+
+                    event_id = hashlib.md5(
+                        f"renaissance-{title}-{event_date.strftime('%Y-%m-%d-%H%M')}".encode()
+                    ).hexdigest()[:12]
+
+                    # Event-Typ mappen
+                    if "lesung" in category:
+                        event_type = "lesung"
+                    elif "gespräch" in category or "salon" in category.lower():
+                        event_type = "diskussion"
+                    elif "poetry" in category or "slam" in category:
+                        event_type = "literatur"
+                    else:
+                        event_type = "sonstiges"
+
+                    events.append({
+                        "id": event_id,
+                        "title": title,
+                        "date": event_date,
+                        "time": time_str,
+                        "venue_slug": venue_slug,
+                        "venue_name": venue_name,
+                        "venue_address": venue_address,
+                        "bezirk": "charlottenburg-wilmersdorf",
+                        "type": event_type,
+                        "description": description,
+                        "link": event_link,
+                        "source": "renaissance-theater",
+                    })
+                except Exception:
+                    continue
+
+    except Exception as e:
+        print(f"[Renaissance] Fehler: {e}")
+
+    print(f"[Renaissance] {len(events)} Special-Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -6181,6 +6343,9 @@ def refresh_cache():
 
     # ZZF Potsdam
     all_events.extend(scrape_zzf())
+
+    # Renaissance-Theater (nur Specials)
+    all_events.extend(scrape_renaissance_theater())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
