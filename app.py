@@ -2923,6 +2923,30 @@ def scrape_kino_central() -> list[dict]:
             event_link = href if href.startswith("http") else f"https://kino-central.de{href}"
             event_id = hashlib.md5(f"kinocentral-{event_link}".encode()).hexdigest()[:12]
 
+            # Beschreibung von Detailseite holen
+            description = ""
+            try:
+                detail_resp = requests.get(
+                    event_link,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                wrapper = detail_soup.select_one(".movie-wrapper")
+                if wrapper:
+                    # Beschreibung ist nach Besetzung/Regie, vor englischer Version
+                    for p in wrapper.select("p"):
+                        text = p.get_text(" ", strip=True)
+                        # Skip technische Infos und englische Beschreibung
+                        if text.startswith(("Sprache:", "Regie:", "Besetzung:", "OmU =", "OV =", "OmeU =")):
+                            continue
+                        # Skip englische Beschreibung (meist kürzer, nach deutscher)
+                        if len(text) > 50 and not description:
+                            description = text[:300]
+                            break
+            except Exception:
+                pass
+
             events.append({
                 "id": event_id,
                 "title": title,
@@ -2933,7 +2957,7 @@ def scrape_kino_central() -> list[dict]:
                 "venue_address": venue_address,
                 "bezirk": "mitte",
                 "type": "film",
-                "description": "",
+                "description": description,
                 "link": event_link,
                 "source": "kino-central",
             })
