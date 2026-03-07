@@ -591,6 +591,7 @@ def scrape_stressfaktor() -> list[dict]:
             "time": time_str,
             "venue_slug": venue_slug,
             "venue_name": venue_info["name"],
+            "venue_address": venue_info["adresse"],
             "bezirk": venue_info["bezirk"],
             "type": event_type,
             "description": description,
