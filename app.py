@@ -4151,6 +4151,13 @@ def scrape_kw() -> list[dict]:
         url="https://www.kw-berlin.de",
     )
 
+    # Kinder/Familien-Veranstaltungen und Führungen ausfiltern
+    BLOCKED_KEYWORDS = [
+        "kinder", "familien", "kids", "0–6", "0-6",
+        "führung", "einblicke in die", "überblicksführung",
+        "somatische übungen", "kw, a hike", "kw, unboxed",
+    ]
+
     try:
         resp = requests.get(
             "https://www.kw-berlin.de/de/veranstaltungen",
@@ -4211,6 +4218,11 @@ def scrape_kw() -> list[dict]:
                     title = title_match.group(1).strip()
 
             if not title or len(title) < 5:
+                continue
+
+            # Kinder/Führungen filtern
+            combined = f"{text} {title}".lower()
+            if any(kw in combined for kw in BLOCKED_KEYWORDS):
                 continue
 
             # Event-Typ aus erstem Wort
@@ -4412,6 +4424,13 @@ def scrape_jmberlin() -> list[dict]:
         url="https://www.jmberlin.de",
     )
 
+    # Führungen, Kinder-Events und Standard-Angebote ausfiltern
+    BLOCKED_KEYWORDS = [
+        "führung", "highlights der dauerausstellung", "architektur, kunst und philosophie",
+        "kinder", "familien", "anoha", "alte heimat – neue heimat",
+        "bilder machen leute", "judentum erklingt", "heute geschlossen",
+    ]
+
     try:
         resp = requests.get(
             "https://www.jmberlin.de/kalender",
@@ -4435,10 +4454,14 @@ def scrape_jmberlin() -> list[dict]:
             href = link.get("href", "")
             text = teaser.get_text(" ", strip=True)
 
-            # Titel: Erster Teil vor dem Datum
-            # "Shoah Filmscreening im Rahmen der Ausstellung Claude Lanzmann. Die Aufzeichnungen (ausgebucht) Sa, 7. Mär 2026"
+            # Titel
             title = link.get_text(strip=True)
             if not title or len(title) < 5:
+                continue
+
+            # Filter anwenden
+            combined = f"{text} {title}".lower()
+            if any(kw in combined for kw in BLOCKED_KEYWORDS):
                 continue
 
             # Datum: "Sa, 7. Mär 2026" oder "7. Mär 2026"
