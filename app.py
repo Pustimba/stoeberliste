@@ -6215,6 +6215,228 @@ def scrape_renaissance_theater() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Flutgraben Scraper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_flutgraben() -> list[dict]:
+    """Scraped Events von Flutgraben e.V.
+
+    Lädt Detailseiten um Datum aus Fließtext zu extrahieren.
+    """
+    events = []
+    venue_name = "Flutgraben e.V."
+    venue_address = "Am Flutgraben 3, 12435 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="treptow-koepenick",
+        url="https://flutgraben.org",
+    )
+
+    url = "https://flutgraben.org/aktuell/filter/events/"
+    now = datetime.now()
+
+    month_map = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12
+    }
+
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for article in soup.select("article.posts_item"):
+            try:
+                link = article.select_one("a.posts_item_link")
+                if not link:
+                    continue
+
+                href = link.get("href", "")
+                if not href:
+                    continue
+
+                title_elem = article.select_one("h3.posts_item_title")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    continue
+
+                # Detailseite laden für Datum
+                detail_resp = requests.get(
+                    href,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                detail_resp.raise_for_status()
+                detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                text = detail_soup.get_text(" ", strip=True)
+
+                # Datum suchen
+                event_date = None
+
+                # Format: "13. bis 16. August" oder "14. März 2026"
+                match = re.search(
+                    r"(\d{1,2})\.\s*(?:bis\s*\d{1,2}\.)?\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)(?:\s*(\d{4}))?",
+                    text, re.IGNORECASE
+                )
+                if match:
+                    day = int(match.group(1))
+                    month = month_map.get(match.group(2).lower(), 1)
+                    year = int(match.group(3)) if match.group(3) else now.year
+                    # Wenn Monat in der Vergangenheit, nächstes Jahr
+                    if not match.group(3) and month < now.month:
+                        year = now.year + 1
+                    event_date = datetime(year, month, day, 19, 0)
+
+                # Format: "14.03.2026"
+                if not event_date:
+                    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+                    if match:
+                        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                        event_date = datetime(year, month, day, 19, 0)
+
+                if not event_date or event_date.date() < now.date():
+                    continue
+
+                # Beschreibung
+                desc_elem = article.select_one("p.posts_item_text")
+                description = desc_elem.get_text(strip=True) if desc_elem else ""
+
+                event_id = hashlib.md5(
+                    f"flutgraben-{title}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": "19:00",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "treptow-koepenick",
+                    "type": "sonstiges",
+                    "description": description,
+                    "link": href,
+                    "source": "flutgraben",
+                })
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Flutgraben] Fehler: {e}")
+
+    print(f"[Flutgraben] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Einstein Forum Scraper (iCal)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scrape_einstein_forum() -> list[dict]:
+    """Scraped Events vom Einstein Forum Potsdam via iCal-Feed."""
+    events = []
+    venue_name = "Einstein Forum"
+    venue_address = "Am Neuen Markt 7, 14467 Potsdam"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="potsdam",
+        url="https://www.einsteinforum.de",
+    )
+
+    ical_url = "https://www.einsteinforum.de/programm/?feed=ical_feed_saison"
+    now = datetime.now()
+
+    try:
+        resp = requests.get(
+            ical_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        ical_text = resp.text
+
+        # iCal Events parsen (VEVENT Blöcke)
+        vevent_pattern = re.compile(r"BEGIN:VEVENT(.*?)END:VEVENT", re.DOTALL)
+
+        for match in vevent_pattern.finditer(ical_text):
+            try:
+                vevent = match.group(1)
+
+                # DTSTART
+                dtstart_match = re.search(r"DTSTART[^:]*:(\d{8}T?\d{0,6})", vevent)
+                if not dtstart_match:
+                    continue
+                dtstart = dtstart_match.group(1)
+                if len(dtstart) >= 8:
+                    year = int(dtstart[0:4])
+                    month = int(dtstart[4:6])
+                    day = int(dtstart[6:8])
+                    hour = int(dtstart[9:11]) if len(dtstart) > 8 else 19
+                    minute = int(dtstart[11:13]) if len(dtstart) > 11 else 0
+                    event_date = datetime(year, month, day, hour, minute)
+                else:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # SUMMARY
+                summary_match = re.search(r"SUMMARY[^:]*:(.*?)(?:\r?\n[A-Z]|\r?\nEND)", vevent, re.DOTALL)
+                title = summary_match.group(1).strip().replace("\r\n ", "").replace("\n ", "") if summary_match else ""
+                if not title:
+                    continue
+
+                # DESCRIPTION
+                desc_match = re.search(r"DESCRIPTION[^:]*:(.*?)(?:\r?\n[A-Z]|\r?\nEND)", vevent, re.DOTALL)
+                description = desc_match.group(1).strip().replace("\r\n ", "").replace("\n ", "").replace("\\n", " ")[:300] if desc_match else ""
+
+                # URL
+                url_match = re.search(r"URL[^:]*:(.*?)(?:\r?\n|$)", vevent)
+                event_link = url_match.group(1).strip() if url_match else "https://www.einsteinforum.de/programm/"
+
+                # LOCATION
+                loc_match = re.search(r"LOCATION[^:]*:(.*?)(?:\r?\n[A-Z]|\r?\nEND)", vevent)
+                event_address = loc_match.group(1).strip().replace("\r\n ", "") if loc_match else venue_address
+
+                time_str = f"{hour:02d}:{minute:02d}"
+
+                event_id = hashlib.md5(
+                    f"einstein-{title}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": time_str,
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": event_address,
+                    "bezirk": "potsdam",
+                    "type": "vortrag",
+                    "description": description,
+                    "link": event_link,
+                    "source": "einstein-forum",
+                })
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Einstein] Fehler: {e}")
+
+    print(f"[Einstein] {len(events)} Events geladen")
+    return events
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -6346,6 +6568,12 @@ def refresh_cache():
 
     # Renaissance-Theater (nur Specials)
     all_events.extend(scrape_renaissance_theater())
+
+    # Flutgraben
+    all_events.extend(scrape_flutgraben())
+
+    # Einstein Forum (iCal)
+    all_events.extend(scrape_einstein_forum())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
