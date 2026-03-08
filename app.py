@@ -80,6 +80,9 @@ VERANSTALTER = {
     "kubiz-wallenberg": {"name": "KuBiZ Wallenberg", "url": "https://www.kubiz-wallenberg.de"},
     "zeiss-grossplanetarium": {"name": "Zeiss-Großplanetarium", "url": "https://www.planetarium.berlin"},
     # "futurium": {"name": "Futurium", "url": "https://futurium.de"},  # PDF-Scraper noch nicht fertig
+    "museumsportal-berlin": {"name": "Museumsportal Berlin", "url": "https://www.museumsportal-berlin.de"},
+    "schaubuehne-berlin": {"name": "Schaubühne Berlin", "url": "https://www.schaubuehne.de"},
+    "luftschloss-tempelhofer-feld": {"name": "Luftschloss Tempelhofer Feld", "url": "https://luftschloss-tempelhoferfeld.de"},
 }
 
 
