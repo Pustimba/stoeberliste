@@ -14,6 +14,7 @@ from flask_session import Session
 import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
+import cloudscraper
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flask App Setup
@@ -6339,6 +6340,488 @@ def scrape_flutgraben() -> list[dict]:
 # Einstein Forum Scraper (iCal)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def scrape_museumsportal() -> list[dict]:
+    """Scraped Events vom Museumsportal Berlin (Film, Konzert, Vortrag/Lesung/Gespräch)."""
+    events = []
+    now = datetime.now()
+
+    # Cloudscraper für Cloudflare-geschützte Seite
+    scraper = cloudscraper.create_scraper()
+
+    # URLs für verschiedene Event-Typen
+    urls = [
+        "https://www.museumsportal-berlin.de/de/programm?event_type=film&event_type=konzert&event_type=vortraglesunggesprach",
+    ]
+
+    for page_url in urls:
+        try:
+            resp = scraper.get(page_url, timeout=30)
+            if resp.status_code != 200:
+                continue
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Events sind in hylo-router-link mit mp-card
+            for link_elem in soup.select("hylo-router-link.list-item"):
+                try:
+                    href = link_elem.get("href", "")
+                    if not href or "/veranstaltungen/" not in href:
+                        continue
+
+                    card = link_elem.select_one("mp-card")
+                    if not card:
+                        continue
+
+                    # Titel
+                    title_elem = card.select_one("h2")
+                    title = title_elem.get_text(strip=True) if title_elem else ""
+                    if not title:
+                        continue
+
+                    # Typ
+                    type_elem = card.select_one(".mp-card-type")
+                    event_type_text = type_elem.get_text(strip=True).lower() if type_elem else ""
+
+                    # Location (Museum)
+                    loc_elem = card.select_one(".mp-card-location")
+                    venue_name = loc_elem.get_text(strip=True) if loc_elem else "Museum Berlin"
+
+                    # Untertitel
+                    subtitle_elem = card.select_one("h3")
+                    subtitle = subtitle_elem.get_text(strip=True) if subtitle_elem else ""
+
+                    # Datum aus mp-card-date
+                    date_elem = card.select_one(".mp-card-date")
+                    date_text = date_elem.get_text(strip=True) if date_elem else ""
+
+                    # Datum parsen
+                    event_date = None
+                    time_str = "19:00"
+
+                    if date_text:
+                        # Format: "So 09.03. | 14:00" oder "09.03.2026"
+                        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", date_text)
+                        time_match = re.search(r"(\d{1,2}):(\d{2})", date_text)
+
+                        if date_match:
+                            day = int(date_match.group(1))
+                            month = int(date_match.group(2))
+                            year = int(date_match.group(3)) if date_match.group(3) else now.year
+                            if month < now.month and not date_match.group(3):
+                                year += 1
+
+                            hour = int(time_match.group(1)) if time_match else 19
+                            minute = int(time_match.group(2)) if time_match else 0
+
+                            try:
+                                event_date = datetime(year, month, day, hour, minute)
+                                time_str = f"{hour:02d}:{minute:02d}"
+                            except ValueError:
+                                continue
+                    else:
+                        # Kein Datum gefunden, Event-Detailseite laden
+                        event_date = now + timedelta(days=1)  # Platzhalter
+
+                    if event_date and event_date.date() < now.date():
+                        continue
+
+                    # Event-Typ bestimmen
+                    if "film" in event_type_text:
+                        event_type = "film"
+                    elif "konzert" in event_type_text:
+                        event_type = "konzert"
+                    elif "lesung" in event_type_text:
+                        event_type = "lesung"
+                    elif "gespräch" in event_type_text or "vortrag" in event_type_text:
+                        event_type = "diskussion"
+                    else:
+                        event_type = "vortrag"
+
+                    # Venue-Slug
+                    venue_slug = get_or_create_venue(
+                        name=venue_name,
+                        adresse="Berlin",
+                        bezirk="mitte",
+                        url="https://www.museumsportal-berlin.de",
+                    )
+
+                    event_link = f"https://www.museumsportal-berlin.de{href}" if href.startswith("/") else href
+
+                    event_id = hashlib.md5(
+                        f"museumsportal-{title}-{event_date.strftime('%Y-%m-%d') if event_date else 'tbd'}".encode()
+                    ).hexdigest()[:12]
+
+                    events.append({
+                        "id": event_id,
+                        "title": title,
+                        "date": event_date,
+                        "time": time_str,
+                        "venue_slug": venue_slug,
+                        "venue_name": venue_name,
+                        "venue_address": "Berlin",
+                        "bezirk": "mitte",
+                        "type": event_type,
+                        "description": subtitle[:300] if subtitle else "",
+                        "link": event_link,
+                        "source": "museumsportal",
+                    })
+
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"[Museumsportal] Fehler: {e}")
+
+    print(f"[Museumsportal] {len(events)} Events geladen")
+    return events
+
+
+def scrape_museumsportal_closing() -> list[dict]:
+    """Scraped 'Endet bald' Ausstellungen vom Museumsportal Berlin."""
+    events = []
+    now = datetime.now()
+
+    scraper = cloudscraper.create_scraper()
+
+    try:
+        resp = scraper.get(
+            "https://www.museumsportal-berlin.de/de/programm?closing_soon=1",
+            timeout=30
+        )
+        if resp.status_code != 200:
+            return events
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for link_elem in soup.select("hylo-router-link.list-item"):
+            try:
+                href = link_elem.get("href", "")
+                if not href:
+                    continue
+
+                card = link_elem.select_one("mp-card")
+                if not card:
+                    continue
+
+                title_elem = card.select_one("h2")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    continue
+
+                loc_elem = card.select_one(".mp-card-location")
+                venue_name = loc_elem.get_text(strip=True) if loc_elem else "Museum Berlin"
+
+                # Datum in <time> Element mit Format "08.03.26"
+                time_elem = card.select_one("time span[aria-hidden]")
+                date_text = time_elem.get_text(strip=True) if time_elem else ""
+
+                end_date = None
+                if date_text:
+                    # Format: "08.03.26" oder "08.03.2026"
+                    date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})", date_text)
+                    if date_match:
+                        day = int(date_match.group(1))
+                        month = int(date_match.group(2))
+                        year_str = date_match.group(3)
+                        year = int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
+                        try:
+                            end_date = datetime(year, month, day, 18, 0)
+                        except ValueError:
+                            pass
+
+                if not end_date or end_date.date() < now.date():
+                    continue
+
+                venue_slug = get_or_create_venue(
+                    name=venue_name,
+                    adresse="Berlin",
+                    bezirk="mitte",
+                    url="https://www.museumsportal-berlin.de",
+                )
+
+                event_link = f"https://www.museumsportal-berlin.de{href}" if href.startswith("/") else href
+
+                # Für jeden Tag von heute bis zum Enddatum ein Event erstellen
+                current_date = now.replace(hour=18, minute=0, second=0, microsecond=0)
+                while current_date.date() <= end_date.date():
+                    event_id = hashlib.md5(
+                        f"closing-{title}-{current_date.strftime('%Y-%m-%d')}".encode()
+                    ).hexdigest()[:12]
+
+                    days_left = (end_date.date() - current_date.date()).days
+                    if days_left == 0:
+                        prefix = "LETZTER TAG:"
+                    elif days_left == 1:
+                        prefix = "ENDET MORGEN:"
+                    else:
+                        prefix = f"ENDET in {days_left} Tagen:"
+
+                    events.append({
+                        "id": event_id,
+                        "title": f"{prefix} {title}",
+                        "date": current_date,
+                        "time": "18:00",
+                        "venue_slug": venue_slug,
+                        "venue_name": venue_name,
+                        "venue_address": "Berlin",
+                        "bezirk": "mitte",
+                        "type": "ausstellung",
+                        "description": f"Ausstellung endet am {end_date.strftime('%d.%m.%Y')}",
+                        "link": event_link,
+                        "source": "museumsportal",
+                    })
+                    current_date += timedelta(days=1)
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Museumsportal Closing] Fehler: {e}")
+
+    print(f"[Museumsportal] {len(events)} 'Endet bald' Ausstellungen geladen")
+    return events
+
+
+def scrape_luftschloss() -> list[dict]:
+    """Scraped Events vom Luftschloss Tempelhofer Feld via REST API."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Luftschloss Tempelhofer Feld"
+    venue_address = "Tempelhofer Feld, Eingang Oderstraße, 12051 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="tempelhof-schoeneberg",
+        url="https://luftschloss-tempelhoferfeld.de",
+    )
+
+    api_url = "https://luftschloss-tempelhoferfeld.de/wp-json/atze-events/v1/events/filtered"
+
+    try:
+        resp = requests.get(
+            api_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Data format: {"2026-05": {"2026-05-20": [event, ...]}}
+        for month_key, days in data.items():
+            if not isinstance(days, dict):
+                continue
+            for date_key, day_events in days.items():
+                if not isinstance(day_events, list):
+                    continue
+                for ev in day_events:
+                    try:
+                        # Parse date from datetimeISO
+                        dt_iso = ev.get("datetimeISO", "")
+                        if not dt_iso:
+                            continue
+                        event_date = datetime.fromisoformat(dt_iso)
+
+                        if event_date.date() < now.date():
+                            continue
+
+                        title = ev.get("name", "")
+                        if not title:
+                            continue
+
+                        time_str = ev.get("time", "20:00")
+                        description = ev.get("excerpt", "")[:300]
+                        link = ev.get("repertoire_link", "https://luftschloss-tempelhoferfeld.de/programm/")
+
+                        # Typ bestimmen aus tags/category
+                        tags = ev.get("tags", "").lower()
+                        category = ev.get("category", "").lower()
+                        if "konzert" in tags or "musik" in tags:
+                            event_type = "konzert"
+                        elif "theater" in category or "schauspiel" in tags:
+                            event_type = "theater"
+                        elif "lesung" in tags:
+                            event_type = "lesung"
+                        else:
+                            event_type = "konzert"  # Default für Luftschloss
+
+                        event_id = hashlib.md5(
+                            f"luftschloss-{ev.get('id', '')}-{event_date.strftime('%Y-%m-%d')}".encode()
+                        ).hexdigest()[:12]
+
+                        events.append({
+                            "id": event_id,
+                            "title": title,
+                            "date": event_date,
+                            "time": time_str,
+                            "venue_slug": venue_slug,
+                            "venue_name": venue_name,
+                            "venue_address": venue_address,
+                            "bezirk": "tempelhof-schoeneberg",
+                            "type": event_type,
+                            "description": description,
+                            "link": link,
+                            "source": "luftschloss",
+                        })
+                    except Exception:
+                        continue
+
+    except Exception as e:
+        print(f"[Luftschloss] Fehler: {e}")
+
+    print(f"[Luftschloss] {len(events)} Events geladen")
+    return events
+
+
+def scrape_schaubuehne() -> list[dict]:
+    """Scraped Events von der Schaubühne Berlin (Diskurs, Lesung, Premiere)."""
+    events = []
+    now = datetime.now()
+
+    # Typen die wir wollen: 29=Diskurs, 28=Lesung, 6=Premiere
+    wanted_types = {"29", "28", "6"}
+
+    venue_name = "Schaubühne Berlin"
+    venue_address = "Kurfürstendamm 153, 10709 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="charlottenburg-wilmersdorf",
+        url="https://www.schaubuehne.de",
+    )
+
+    try:
+        # AJAX Endpunkt laden
+        page = 0
+        last_termin = 0
+        all_html = ""
+
+        while True:
+            resp = requests.get(
+                f"https://www.schaubuehne.de/de/spielplan/programm.html?ajax=1&offset={page}&letzterTermin={last_termin}",
+                headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                timeout=15,
+            )
+            if resp.status_code != 200 or "ende erreicht" in resp.text.lower():
+                break
+
+            content = resp.text
+            all_html += content
+
+            # Letzten Termin extrahieren
+            termin_match = re.search(r'class="d-none letzterTermin">(\d+)</div>', content)
+            if termin_match:
+                last_termin = int(termin_match.group(1))
+            else:
+                break
+
+            page += 1
+            if page > 10:
+                break
+
+        soup = BeautifulSoup(all_html, "html.parser")
+
+        for vorstellung in soup.select("div.vorstellung"):
+            try:
+                classes = " ".join(vorstellung.get("class", []))
+
+                # Prüfen ob der Typ gewünscht ist
+                is_wanted = False
+                event_type = "theater"
+                for t in wanted_types:
+                    if f"typ-{t}" in classes:
+                        is_wanted = True
+                        if t == "29":
+                            event_type = "diskussion"
+                        elif t == "28":
+                            event_type = "lesung"
+                        elif t == "6":
+                            event_type = "theater"
+                        break
+
+                if not is_wanted:
+                    continue
+
+                # Datum aus data-date (Format: 080326 = 08.03.26)
+                data_date = vorstellung.get("data-date", "")
+                if len(data_date) == 6:
+                    day = int(data_date[0:2])
+                    month = int(data_date[2:4])
+                    year = 2000 + int(data_date[4:6])
+                else:
+                    continue
+
+                # Uhrzeit
+                time_elem = vorstellung.select_one("div.col-6, div.col-weekday ~ div")
+                time_text = ""
+                for div in vorstellung.select("div"):
+                    text = div.get_text(strip=True)
+                    if re.match(r"\d{1,2}\.\d{2}", text):
+                        time_text = text
+                        break
+
+                if time_text:
+                    time_match = re.match(r"(\d{1,2})\.(\d{2})", time_text)
+                    if time_match:
+                        hour = int(time_match.group(1))
+                        minute = int(time_match.group(2))
+                    else:
+                        hour, minute = 19, 30
+                else:
+                    hour, minute = 19, 30
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel
+                title_link = vorstellung.select_one("a.no-underline")
+                title = title_link.get_text(strip=True) if title_link else ""
+                if not title:
+                    continue
+
+                href = title_link.get("href", "") if title_link else ""
+                event_link = f"https://www.schaubuehne.de/de/{href}" if href else "https://www.schaubuehne.de"
+
+                # Beschreibung
+                desc_elem = vorstellung.select_one("div.col-xl-7.fs-4")
+                description = desc_elem.get_text(strip=True)[:200] if desc_elem else ""
+
+                time_str = f"{hour:02d}:{minute:02d}"
+
+                event_id = hashlib.md5(
+                    f"schaubuehne-{title}-{event_date.strftime('%Y-%m-%d-%H%M')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": time_str,
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "charlottenburg-wilmersdorf",
+                    "type": event_type,
+                    "description": description,
+                    "link": event_link,
+                    "source": "schaubuehne",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Schaubühne] Fehler: {e}")
+
+    print(f"[Schaubühne] {len(events)} Events geladen (Diskurs/Lesung/Premiere)")
+    return events
+
+
 def scrape_einstein_forum() -> list[dict]:
     """Scraped Events vom Einstein Forum Potsdam via iCal-Feed."""
     events = []
@@ -6574,6 +7057,16 @@ def refresh_cache():
 
     # Einstein Forum (iCal)
     all_events.extend(scrape_einstein_forum())
+
+    # Museumsportal Berlin
+    all_events.extend(scrape_museumsportal())
+    all_events.extend(scrape_museumsportal_closing())
+
+    # Schaubühne (Diskurs, Lesung, Premiere)
+    all_events.extend(scrape_schaubuehne())
+
+    # Luftschloss Tempelhofer Feld
+    all_events.extend(scrape_luftschloss())
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
