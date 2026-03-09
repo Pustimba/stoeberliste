@@ -80,7 +80,7 @@ VERANSTALTER = {
     "kubiz-wallenberg": {"name": "KuBiZ Wallenberg", "url": "https://www.kubiz-wallenberg.de"},
     "zeiss-grossplanetarium": {"name": "Zeiss-Großplanetarium", "url": "https://www.planetarium.berlin"},
     # "futurium": {"name": "Futurium", "url": "https://futurium.de"},  # PDF-Scraper noch nicht fertig
-    "museumsportal-berlin": {"name": "Museumsportal Berlin", "url": "https://www.museumsportal-berlin.de"},
+    # Museumsportal nicht als eigener Veranstalter - Events erscheinen beim jeweiligen Museum
     "schaubuehne-berlin": {"name": "Schaubühne Berlin", "url": "https://www.schaubuehne.de"},
     "luftschloss-tempelhofer-feld": {"name": "Luftschloss Tempelhofer Feld", "url": "https://luftschloss-tempelhoferfeld.de"},
 }
@@ -105,8 +105,18 @@ def get_all_venues() -> dict[str, dict]:
 
 
 def get_veranstalter() -> dict[str, dict]:
-    """Gibt alle Veranstalter für das Dropdown zurück."""
-    return VERANSTALTER
+    """Gibt alle Veranstalter für das Dropdown zurück (alphabetisch sortiert)."""
+    return dict(sorted(VERANSTALTER.items(), key=lambda x: x[1]["name"].lower()))
+
+
+def get_bezirke_sorted() -> dict[str, str]:
+    """Gibt Bezirke alphabetisch sortiert zurück."""
+    return dict(sorted(BEZIRKE.items(), key=lambda x: x[1].lower()))
+
+
+def get_event_types_sorted() -> dict[str, str]:
+    """Gibt Event-Typen alphabetisch sortiert zurück."""
+    return dict(sorted(EVENT_TYPES.items(), key=lambda x: x[1].lower()))
 
 
 def get_or_create_venue(name: str, adresse: str = None, bezirk: str = None, url: str = None) -> str:
@@ -6368,7 +6378,7 @@ def scrape_museumsportal() -> list[dict]:
             for link_elem in soup.select("hylo-router-link.list-item"):
                 try:
                     href = link_elem.get("href", "")
-                    if not href or "/veranstaltungen/" not in href:
+                    if not href or "veranstaltungen" not in href:
                         continue
 
                     card = link_elem.select_one("mp-card")
@@ -7102,8 +7112,8 @@ def index():
         "index.html",
         events=events,
         venues=get_veranstalter(),
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
     )
 
 
@@ -7128,8 +7138,8 @@ def tag(datum: str):
         events=events,
         datum=target_date,
         venues=get_veranstalter(),
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
     )
 
 
@@ -7137,8 +7147,15 @@ def tag(datum: str):
 def ort(slug: str):
     """Events für einen bestimmten Veranstalter."""
     veranstalter = get_veranstalter()
+    all_venues = get_all_venues()
 
-    if slug not in veranstalter:
+    # Prüfen ob Venue existiert (in VERANSTALTER oder dynamisch erstellt)
+    if slug in veranstalter:
+        venue = veranstalter[slug]
+    elif slug in all_venues:
+        # Dynamisch erstellter Venue (z.B. aus Museumsportal)
+        venue = all_venues[slug]
+    else:
         # Unbekannter Veranstalter
         return render_template(
             "ort.html",
@@ -7146,11 +7163,10 @@ def ort(slug: str):
             venue={"name": slug.replace("-", " ").title(), "adresse": None, "url": None},
             venue_slug=slug,
             venues=veranstalter,
-            event_types=EVENT_TYPES,
-            bezirke=BEZIRKE,
+            event_types=get_event_types_sorted(),
+            bezirke=get_bezirke_sorted(),
         )
 
-    venue = veranstalter[slug]
     events = get_events_by_veranstalter(slug)
     events = sorted(events, key=lambda x: x.get("date", datetime.max))
 
@@ -7160,8 +7176,8 @@ def ort(slug: str):
         venue=venue,
         venue_slug=slug,
         venues=veranstalter,
-        event_types=EVENT_TYPES,
-        bezirke=BEZIRKE,
+        event_types=get_event_types_sorted(),
+        bezirke=get_bezirke_sorted(),
     )
 
 
@@ -7179,8 +7195,8 @@ def typ(slug: str):
         events=events,
         event_type=EVENT_TYPES[slug],
         type_slug=slug,
-        event_types=EVENT_TYPES,
-        bezirke=BEZIRKE,
+        event_types=get_event_types_sorted(),
+        bezirke=get_bezirke_sorted(),
         venues=get_veranstalter(),
     )
 
@@ -7199,8 +7215,8 @@ def bezirk(slug: str):
         events=events,
         bezirk=BEZIRKE[slug],
         bezirk_slug=slug,
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
         venues=get_veranstalter(),
     )
 
@@ -7221,8 +7237,8 @@ def woche():
         "woche.html",
         week_events=week_events,
         venues=get_veranstalter(),
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
     )
 
 
@@ -7268,8 +7284,8 @@ def suche():
         "suche.html",
         events=events,
         query=query,
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
         venues=get_veranstalter(),
         time_slots=TIME_SLOTS,
         selected_bezirke=bezirk_filter,
@@ -7289,8 +7305,8 @@ def merkliste():
         "merkliste.html",
         events=events,
         venues=get_veranstalter(),
-        bezirke=BEZIRKE,
-        event_types=EVENT_TYPES,
+        bezirke=get_bezirke_sorted(),
+        event_types=get_event_types_sorted(),
     )
 
 

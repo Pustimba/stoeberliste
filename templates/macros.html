@@ -10,8 +10,13 @@
 <article class="event-card">
     <div class="venue-panel">
         <a href="{{ url_for('ort', slug=event.venue_slug) }}" class="venue-panel-link">
-            {% if event.venue_slug in venue_logos %}
-            <img src="{{ url_for('static', filename='img/logos/' + venue_logos[event.venue_slug]) }}" alt="{{ event.venue_name }}" class="venue-logo">
+            {# Logo-Slug: prioritize logo_slug, then venue_slug, then check link for rosalux #}
+            {% set logo_slug = event.logo_slug if event.logo_slug else event.venue_slug %}
+            {% if logo_slug not in venue_logos and event.link and 'rosalux.de' in event.link %}
+                {% set logo_slug = 'rosa-luxemburg-stiftung' %}
+            {% endif %}
+            {% if logo_slug in venue_logos %}
+            <img src="{{ url_for('static', filename='img/logos/' + venue_logos[logo_slug]) }}" alt="{{ event.venue_name }}" class="venue-logo">
             {% else %}
             <span class="venue-name-fallback">{{ event.venue_name }}</span>
             {% endif %}
