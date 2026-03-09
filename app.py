@@ -6353,13 +6353,48 @@ def scrape_flutgraben() -> list[dict]:
 # Einstein Forum Scraper (iCal)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_museumsportal_page(url: str) -> str | None:
+    """Versucht Museumsportal-Seite zu laden mit verschiedenen Methoden."""
+    # Methode 1: cloudscraper mit Browser-Emulation
+    try:
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'linux',
+                'desktop': True
+            }
+        )
+        resp = scraper.get(url, timeout=30)
+        if resp.status_code == 200 and 'hylo-router-link' in resp.text:
+            return resp.text
+        print(f"[Museumsportal] cloudscraper: Status {resp.status_code}, keine Events gefunden")
+    except Exception as e:
+        print(f"[Museumsportal] cloudscraper Fehler: {e}")
+
+    # Methode 2: Standard requests mit Browser-Headers
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 200 and 'hylo-router-link' in resp.text:
+            return resp.text
+        print(f"[Museumsportal] requests: Status {resp.status_code}")
+    except Exception as e:
+        print(f"[Museumsportal] requests Fehler: {e}")
+
+    return None
+
+
 def scrape_museumsportal() -> list[dict]:
     """Scraped Events vom Museumsportal Berlin (Film, Konzert, Vortrag/Lesung/Gespräch)."""
     events = []
     now = datetime.now()
-
-    # Cloudscraper für Cloudflare-geschützte Seite
-    scraper = cloudscraper.create_scraper()
 
     # URLs für verschiedene Event-Typen
     urls = [
@@ -6368,11 +6403,12 @@ def scrape_museumsportal() -> list[dict]:
 
     for page_url in urls:
         try:
-            resp = scraper.get(page_url, timeout=30)
-            if resp.status_code != 200:
+            html = _fetch_museumsportal_page(page_url)
+            if not html:
+                print(f"[Museumsportal] Konnte Seite nicht laden: {page_url}")
                 continue
 
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
 
             # Events sind in hylo-router-link mit mp-card
             for link_elem in soup.select("hylo-router-link.list-item"):
@@ -6494,17 +6530,13 @@ def scrape_museumsportal_closing() -> list[dict]:
     events = []
     now = datetime.now()
 
-    scraper = cloudscraper.create_scraper()
-
     try:
-        resp = scraper.get(
-            "https://www.museumsportal-berlin.de/de/programm?closing_soon=1",
-            timeout=30
-        )
-        if resp.status_code != 200:
+        html = _fetch_museumsportal_page("https://www.museumsportal-berlin.de/de/programm?closing_soon=1")
+        if not html:
+            print("[Museumsportal] Konnte 'Endet bald' Seite nicht laden")
             return events
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
 
         for link_elem in soup.select("hylo-router-link.list-item"):
             try:
