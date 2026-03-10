@@ -29,10 +29,15 @@ def scrape_events(page) -> list[dict]:
 
     url = "https://www.museumsportal-berlin.de/de/programm?event_type=film&event_type=konzert&event_type=vortraglesunggesprach"
     print(f"Lade Events von: {url}")
-    page.goto(url, wait_until="networkidle", timeout=60000)
+    print("(Warte auf Seite - kann etwas dauern...)")
 
-    # Warte auf User-Input falls Captcha
-    input("Drücke ENTER wenn die Seite fertig geladen ist (ggf. Captcha lösen)...")
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+    except Exception as e:
+        print(f"Timeout beim Laden, aber Browser ist offen: {e}")
+
+    # Warte auf User-Input falls Captcha oder langsames Laden
+    input("\nDrücke ENTER wenn die Seite FERTIG geladen ist (ggf. Captcha lösen)...")
 
     # Scrollen um alle Events zu laden
     print("Scrolle durch die Seite...")
@@ -135,9 +140,13 @@ def scrape_closing_soon(page) -> list[dict]:
 
     url = "https://www.museumsportal-berlin.de/de/programm?closing_soon=1"
     print(f"\nLade 'Endet bald' von: {url}")
-    page.goto(url, wait_until="networkidle", timeout=60000)
 
-    input("Drücke ENTER wenn die Seite fertig geladen ist...")
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+    except Exception as e:
+        print(f"Timeout beim Laden: {e}")
+
+    input("\nDrücke ENTER wenn die Seite FERTIG geladen ist...")
 
     # Scrollen
     for _ in range(3):
