@@ -6355,7 +6355,23 @@ def scrape_flutgraben() -> list[dict]:
 
 def _fetch_museumsportal_page(url: str) -> str | None:
     """Versucht Museumsportal-Seite zu laden mit verschiedenen Methoden."""
-    # Methode 1: cloudscraper mit Browser-Emulation
+    # Methode 1: Playwright (headless browser)
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            html = page.content()
+            browser.close()
+            if 'hylo-router-link' in html:
+                print(f"[Museumsportal] Playwright: Seite erfolgreich geladen")
+                return html
+            print(f"[Museumsportal] Playwright: Keine Events gefunden")
+    except Exception as e:
+        print(f"[Museumsportal] Playwright Fehler: {e}")
+
+    # Methode 2: cloudscraper als Fallback
     try:
         scraper = cloudscraper.create_scraper(
             browser={
@@ -6370,23 +6386,6 @@ def _fetch_museumsportal_page(url: str) -> str | None:
         print(f"[Museumsportal] cloudscraper: Status {resp.status_code}, keine Events gefunden")
     except Exception as e:
         print(f"[Museumsportal] cloudscraper Fehler: {e}")
-
-    # Methode 2: Standard requests mit Browser-Headers
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code == 200 and 'hylo-router-link' in resp.text:
-            return resp.text
-        print(f"[Museumsportal] requests: Status {resp.status_code}")
-    except Exception as e:
-        print(f"[Museumsportal] requests Fehler: {e}")
 
     return None
 
