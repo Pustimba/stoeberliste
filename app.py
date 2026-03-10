@@ -5,6 +5,7 @@ für linke Subkultur und Politik
 
 import os
 import re
+import gc
 import hashlib
 import unicodedata
 from html import unescape
@@ -6353,243 +6354,71 @@ def scrape_flutgraben() -> list[dict]:
 # Einstein Forum Scraper (iCal)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_museumsportal_page(url: str) -> str | None:
-    """Versucht Museumsportal-Seite zu laden mit verschiedenen Methoden."""
-    # Methode 1: Playwright (headless browser)
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, wait_until="networkidle", timeout=60000)
-            html = page.content()
-            browser.close()
-            if 'hylo-router-link' in html:
-                print(f"[Museumsportal] Playwright: Seite erfolgreich geladen")
-                return html
-            print(f"[Museumsportal] Playwright: Keine Events gefunden")
-    except Exception as e:
-        print(f"[Museumsportal] Playwright Fehler: {e}")
-
-    # Methode 2: cloudscraper als Fallback
-    try:
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'linux',
-                'desktop': True
-            }
-        )
-        resp = scraper.get(url, timeout=30)
-        if resp.status_code == 200 and 'hylo-router-link' in resp.text:
-            return resp.text
-        print(f"[Museumsportal] cloudscraper: Status {resp.status_code}, keine Events gefunden")
-    except Exception as e:
-        print(f"[Museumsportal] cloudscraper Fehler: {e}")
-
-    return None
-
-
-def scrape_museumsportal() -> list[dict]:
-    """Scraped Events vom Museumsportal Berlin (Film, Konzert, Vortrag/Lesung/Gespräch)."""
+def load_museumsportal_from_json() -> list[dict]:
+    """Lädt Museumsportal-Events aus manuell gepflegter JSON-Datei."""
+    import json
     events = []
     now = datetime.now()
-
-    # URLs für verschiedene Event-Typen
-    urls = [
-        "https://www.museumsportal-berlin.de/de/programm?event_type=film&event_type=konzert&event_type=vortraglesunggesprach",
-    ]
-
-    for page_url in urls:
-        try:
-            html = _fetch_museumsportal_page(page_url)
-            if not html:
-                print(f"[Museumsportal] Konnte Seite nicht laden: {page_url}")
-                continue
-
-            soup = BeautifulSoup(html, "html.parser")
-
-            # Events sind in hylo-router-link mit mp-card
-            for link_elem in soup.select("hylo-router-link.list-item"):
-                try:
-                    href = link_elem.get("href", "")
-                    if not href or "veranstaltungen" not in href:
-                        continue
-
-                    card = link_elem.select_one("mp-card")
-                    if not card:
-                        continue
-
-                    # Titel
-                    title_elem = card.select_one("h2")
-                    title = title_elem.get_text(strip=True) if title_elem else ""
-                    if not title:
-                        continue
-
-                    # Typ
-                    type_elem = card.select_one(".mp-card-type")
-                    event_type_text = type_elem.get_text(strip=True).lower() if type_elem else ""
-
-                    # Location (Museum)
-                    loc_elem = card.select_one(".mp-card-location")
-                    venue_name = loc_elem.get_text(strip=True) if loc_elem else "Museum Berlin"
-
-                    # Untertitel
-                    subtitle_elem = card.select_one("h3")
-                    subtitle = subtitle_elem.get_text(strip=True) if subtitle_elem else ""
-
-                    # Datum aus mp-card-date
-                    date_elem = card.select_one(".mp-card-date")
-                    date_text = date_elem.get_text(strip=True) if date_elem else ""
-
-                    # Datum parsen
-                    event_date = None
-                    time_str = "19:00"
-
-                    if date_text:
-                        # Format: "So 09.03. | 14:00" oder "09.03.2026"
-                        date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})?", date_text)
-                        time_match = re.search(r"(\d{1,2}):(\d{2})", date_text)
-
-                        if date_match:
-                            day = int(date_match.group(1))
-                            month = int(date_match.group(2))
-                            year = int(date_match.group(3)) if date_match.group(3) else now.year
-                            if month < now.month and not date_match.group(3):
-                                year += 1
-
-                            hour = int(time_match.group(1)) if time_match else 19
-                            minute = int(time_match.group(2)) if time_match else 0
-
-                            try:
-                                event_date = datetime(year, month, day, hour, minute)
-                                time_str = f"{hour:02d}:{minute:02d}"
-                            except ValueError:
-                                continue
-                    else:
-                        # Kein Datum gefunden, Event-Detailseite laden
-                        event_date = now + timedelta(days=1)  # Platzhalter
-
-                    if event_date and event_date.date() < now.date():
-                        continue
-
-                    # Event-Typ bestimmen
-                    if "film" in event_type_text:
-                        event_type = "film"
-                    elif "konzert" in event_type_text:
-                        event_type = "konzert"
-                    elif "lesung" in event_type_text:
-                        event_type = "lesung"
-                    elif "gespräch" in event_type_text or "vortrag" in event_type_text:
-                        event_type = "diskussion"
-                    else:
-                        event_type = "vortrag"
-
-                    # Venue-Slug
-                    venue_slug = get_or_create_venue(
-                        name=venue_name,
-                        adresse="Berlin",
-                        bezirk="mitte",
-                        url="https://www.museumsportal-berlin.de",
-                    )
-
-                    event_link = f"https://www.museumsportal-berlin.de{href}" if href.startswith("/") else href
-
-                    event_id = hashlib.md5(
-                        f"museumsportal-{title}-{event_date.strftime('%Y-%m-%d') if event_date else 'tbd'}".encode()
-                    ).hexdigest()[:12]
-
-                    events.append({
-                        "id": event_id,
-                        "title": title,
-                        "date": event_date,
-                        "time": time_str,
-                        "venue_slug": venue_slug,
-                        "venue_name": venue_name,
-                        "venue_address": "Berlin",
-                        "bezirk": "mitte",
-                        "type": event_type,
-                        "description": subtitle[:300] if subtitle else "",
-                        "link": event_link,
-                        "source": "museumsportal",
-                    })
-
-                except Exception:
-                    continue
-
-        except Exception as e:
-            print(f"[Museumsportal] Fehler: {e}")
-
-    print(f"[Museumsportal] {len(events)} Events geladen")
-    return events
-
-
-def scrape_museumsportal_closing() -> list[dict]:
-    """Scraped 'Endet bald' Ausstellungen vom Museumsportal Berlin."""
-    events = []
-    now = datetime.now()
+    json_path = os.path.join(os.path.dirname(__file__), "data", "museumsportal.json")
 
     try:
-        html = _fetch_museumsportal_page("https://www.museumsportal-berlin.de/de/programm?closing_soon=1")
-        if not html:
-            print("[Museumsportal] Konnte 'Endet bald' Seite nicht laden")
-            return events
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-        soup = BeautifulSoup(html, "html.parser")
-
-        for link_elem in soup.select("hylo-router-link.list-item"):
+        # Events laden
+        for item in data.get("events", []):
             try:
-                href = link_elem.get("href", "")
-                if not href:
-                    continue
-
-                card = link_elem.select_one("mp-card")
-                if not card:
-                    continue
-
-                title_elem = card.select_one("h2")
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                if not title:
-                    continue
-
-                loc_elem = card.select_one(".mp-card-location")
-                venue_name = loc_elem.get_text(strip=True) if loc_elem else "Museum Berlin"
-
-                # Datum in <time> Element mit Format "08.03.26"
-                time_elem = card.select_one("time span[aria-hidden]")
-                date_text = time_elem.get_text(strip=True) if time_elem else ""
-
-                end_date = None
-                if date_text:
-                    # Format: "08.03.26" oder "08.03.2026"
-                    date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})", date_text)
-                    if date_match:
-                        day = int(date_match.group(1))
-                        month = int(date_match.group(2))
-                        year_str = date_match.group(3)
-                        year = int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
-                        try:
-                            end_date = datetime(year, month, day, 18, 0)
-                        except ValueError:
-                            pass
-
-                if not end_date or end_date.date() < now.date():
+                event_date = datetime.strptime(item["date"], "%Y-%m-%d %H:%M")
+                if event_date.date() < now.date():
                     continue
 
                 venue_slug = get_or_create_venue(
-                    name=venue_name,
+                    name=item.get("venue_name", "Museum Berlin"),
                     adresse="Berlin",
-                    bezirk="mitte",
+                    bezirk=item.get("bezirk", "mitte"),
                     url="https://www.museumsportal-berlin.de",
                 )
 
-                event_link = f"https://www.museumsportal-berlin.de{href}" if href.startswith("/") else href
+                event_id = hashlib.md5(
+                    f"museumsportal-{item['title']}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
 
-                # Für jeden Tag von heute bis zum Enddatum ein Event erstellen
+                events.append({
+                    "id": event_id,
+                    "title": item["title"],
+                    "date": event_date,
+                    "time": event_date.strftime("%H:%M"),
+                    "venue_slug": venue_slug,
+                    "venue_name": item.get("venue_name", "Museum Berlin"),
+                    "venue_address": "Berlin",
+                    "bezirk": item.get("bezirk", "mitte"),
+                    "type": item.get("type", "vortrag"),
+                    "description": item.get("description", ""),
+                    "link": item.get("link", ""),
+                    "source": "museumsportal",
+                })
+            except Exception:
+                continue
+
+        # "Endet bald" Ausstellungen laden
+        for item in data.get("closing_soon", []):
+            try:
+                end_date = datetime.strptime(item["end_date"], "%Y-%m-%d")
+                if end_date.date() < now.date():
+                    continue
+
+                venue_slug = get_or_create_venue(
+                    name=item.get("venue_name", "Museum Berlin"),
+                    adresse="Berlin",
+                    bezirk=item.get("bezirk", "mitte"),
+                    url="https://www.museumsportal-berlin.de",
+                )
+
+                # Für jeden Tag von heute bis zum Enddatum ein Event
                 current_date = now.replace(hour=18, minute=0, second=0, microsecond=0)
                 while current_date.date() <= end_date.date():
                     event_id = hashlib.md5(
-                        f"closing-{title}-{current_date.strftime('%Y-%m-%d')}".encode()
+                        f"closing-{item['title']}-{current_date.strftime('%Y-%m-%d')}".encode()
                     ).hexdigest()[:12]
 
                     days_left = (end_date.date() - current_date.date()).days
@@ -6602,27 +6431,29 @@ def scrape_museumsportal_closing() -> list[dict]:
 
                     events.append({
                         "id": event_id,
-                        "title": f"{prefix} {title}",
+                        "title": f"{prefix} {item['title']}",
                         "date": current_date,
                         "time": "18:00",
                         "venue_slug": venue_slug,
-                        "venue_name": venue_name,
+                        "venue_name": item.get("venue_name", "Museum Berlin"),
                         "venue_address": "Berlin",
-                        "bezirk": "mitte",
+                        "bezirk": item.get("bezirk", "mitte"),
                         "type": "ausstellung",
                         "description": f"Ausstellung endet am {end_date.strftime('%d.%m.%Y')}",
-                        "link": event_link,
+                        "link": item.get("link", ""),
                         "source": "museumsportal",
                     })
                     current_date += timedelta(days=1)
-
             except Exception:
                 continue
 
-    except Exception as e:
-        print(f"[Museumsportal Closing] Fehler: {e}")
+        print(f"[Museumsportal] {len(events)} Events aus JSON geladen")
 
-    print(f"[Museumsportal] {len(events)} 'Endet bald' Ausstellungen geladen")
+    except FileNotFoundError:
+        print("[Museumsportal] JSON-Datei nicht gefunden")
+    except Exception as e:
+        print(f"[Museumsportal] Fehler beim Laden: {e}")
+
     return events
 
 
@@ -7102,15 +6933,17 @@ def refresh_cache():
     # Einstein Forum (iCal)
     all_events.extend(scrape_einstein_forum())
 
-    # Museumsportal Berlin
-    all_events.extend(scrape_museumsportal())
-    all_events.extend(scrape_museumsportal_closing())
+    # Museumsportal Berlin (aus manuell gepflegter JSON-Datei)
+    all_events.extend(load_museumsportal_from_json())
 
     # Schaubühne (Diskurs, Lesung, Premiere)
     all_events.extend(scrape_schaubuehne())
 
     # Luftschloss Tempelhofer Feld
     all_events.extend(scrape_luftschloss())
+
+    # Speicher freigeben
+    gc.collect()
 
     # Sortieren nach Datum
     all_events.sort(key=lambda x: x.get("date", datetime.max))
