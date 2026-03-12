@@ -7897,49 +7897,19 @@ def scrape_kreativhaus() -> list[dict]:
 def scrape_newsletter_rss() -> list[dict]:
     """Scraped Events aus Newsletter-RSS-Feed (Kill the Newsletter).
 
-    Extrahiert Events aus HTML-Newslettern von:
-    - Urban Nation
-    - Akademie der Künste
-    - Berliner Unterwelten
-    - etc.
+    Extrahiert Events aus HTML-Newslettern von Urban Nation.
+    Format: Titel in font-size:20px div, Beschreibung in font-size:14px div,
+    Datum bei "Wann:", Ort bei "Wo:", Link bei "Mehr erfahren".
     """
     events = []
     now = datetime.now()
 
-    # Venue-Mapping für Newsletter-Absender
-    VENUE_MAP = {
-        "urban nation": {
-            "name": "Urban Nation Museum",
-            "address": "Bülowstraße 7, 10783 Berlin",
-            "bezirk": "schoeneberg",
-            "url": "https://urban-nation.com",
-        },
-        "akademie der künste": {
-            "name": "Akademie der Künste",
-            "address": "Pariser Platz 4, 10117 Berlin",
-            "bezirk": "mitte",
-            "url": "https://www.adk.de",
-        },
-        "adk": {
-            "name": "Akademie der Künste",
-            "address": "Pariser Platz 4, 10117 Berlin",
-            "bezirk": "mitte",
-            "url": "https://www.adk.de",
-        },
-        "berliner unterwelten": {
-            "name": "Berliner Unterwelten",
-            "address": "Brunnenstraße 105, 13355 Berlin",
-            "bezirk": "mitte",
-            "url": "https://www.berliner-unterwelten.de",
-        },
+    # Monatsnamen für Parsing
+    MONTHS = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12
     }
-
-    # Blockliste für Kinderveranstaltungen
-    BLOCKED_PATTERNS = [
-        "für kinder", "kinder ab", "familienführung",
-        "ab 3", "ab 4", "ab 5", "ab 6", "ab 7", "ab 8",
-        "workshop für kinder", "kinderworkshop",
-    ]
 
     try:
         resp = requests.get(
@@ -7954,28 +7924,14 @@ def scrape_newsletter_rss() -> list[dict]:
 
         for entry in soup.find_all("entry"):
             try:
-                entry_title = entry.find("title")
-                if not entry_title:
+                entry_title_elem = entry.find("title")
+                if not entry_title_elem:
                     continue
-                newsletter_title = entry_title.get_text(strip=True).lower()
+                newsletter_title = entry_title_elem.get_text(strip=True).lower()
 
-                # Venue bestimmen
-                venue_info = None
-                for key, info in VENUE_MAP.items():
-                    if key in newsletter_title:
-                        venue_info = info
-                        break
-
-                if not venue_info:
-                    # Unbekannter Newsletter, überspringen
+                # Nur Urban Nation Newsletter verarbeiten
+                if "urban nation" not in newsletter_title:
                     continue
-
-                venue_slug = get_or_create_venue(
-                    name=venue_info["name"],
-                    adresse=venue_info["address"],
-                    bezirk=venue_info["bezirk"],
-                    url=venue_info["url"],
-                )
 
                 # HTML-Content des Newsletters
                 content_elem = entry.find("content")
@@ -7985,120 +7941,133 @@ def scrape_newsletter_rss() -> list[dict]:
 
                 # HTML parsen
                 content_soup = BeautifulSoup(html_content, "html.parser")
-                text_content = content_soup.get_text(" ", strip=True)
 
-                # Events im Newsletter-Text finden
-                # Suche nach Datum-Mustern: "15. März 2026", "15.03.2026", etc.
-                # und extrahiere umgebenden Text als Event-Titel
+                # Events finden: Titel in 20px font, Beschreibung in 14px font
+                # Suche nach allen divs mit font-size:20px (Titel)
+                title_divs = content_soup.find_all("div", style=lambda s: s and "font-size:20px" in s)
 
-                # Pattern 1: "DD. Monat YYYY"
-                months = {
-                    "januar": 1, "februar": 2, "märz": 3, "april": 4,
-                    "mai": 5, "juni": 6, "juli": 7, "august": 8,
-                    "september": 9, "oktober": 10, "november": 11, "dezember": 12
-                }
-
-                # Suche nach Datum + Text Kombinationen
-                lines = text_content.split("\n")
-                for i, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    # Datum suchen
-                    date_match = re.search(r"(\d{1,2})\.\s*(\w+)\s*(\d{4})", line.lower())
-                    if date_match:
-                        day = int(date_match.group(1))
-                        month_name = date_match.group(2)
-                        year = int(date_match.group(3))
-                        month = months.get(month_name, 0)
-                    else:
-                        date_match2 = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", line)
-                        if date_match2:
-                            day = int(date_match2.group(1))
-                            month = int(date_match2.group(2))
-                            year = int(date_match2.group(3))
-                        else:
+                for title_div in title_divs:
+                    try:
+                        title = title_div.get_text(strip=True)
+                        if not title or len(title) < 5:
                             continue
 
-                    if month == 0:
+                        # Überspringe englische Titel (nur deutsch)
+                        # Einfacher Check: enthält deutsche Wörter?
+                        # Wir akzeptieren alle, da Urban Nation oft englische Titel hat
+
+                        # Suche Beschreibungs-div (14px) nach dem Titel
+                        description = ""
+                        event_link = ""
+                        event_date = None
+                        location = ""
+                        is_free = False
+
+                        # Nächstes Geschwister-Element oder Parent durchsuchen
+                        next_elem = title_div.find_next_sibling()
+                        if not next_elem:
+                            next_elem = title_div.parent.find_next_sibling() if title_div.parent else None
+
+                        # Suche im umgebenden Bereich nach Infos
+                        parent = title_div.parent
+                        search_area = parent.parent if parent else title_div
+                        if search_area:
+                            area_text = search_area.get_text(" ", strip=True)
+
+                            # Datum extrahieren: "Wann: 13. März 2026, 19–21 Uhr"
+                            wann_match = re.search(
+                                r"Wann[:\s]*(\d{1,2})\.\s*(\w+)\s*(\d{4})[,\s]*(\d{1,2})(?:[–\-:](\d{1,2}))?\s*Uhr",
+                                area_text, re.IGNORECASE
+                            )
+                            if wann_match:
+                                day = int(wann_match.group(1))
+                                month_name = wann_match.group(2).lower()
+                                year = int(wann_match.group(3))
+                                hour = int(wann_match.group(4))
+                                month = MONTHS.get(month_name, 0)
+                                if month > 0:
+                                    try:
+                                        event_date = datetime(year, month, day, hour, 0)
+                                    except ValueError:
+                                        pass
+
+                            # Ort extrahieren: "Wo: Martha Cooper Library..."
+                            wo_match = re.search(r"Wo[:\s]*([^<\n]+?)(?:Eintritt|Mehr erfahren|$)", area_text)
+                            if wo_match:
+                                location = wo_match.group(1).strip()
+
+                            # Eintritt frei?
+                            if "eintritt" in area_text.lower() and "frei" in area_text.lower():
+                                is_free = True
+
+                            # Link extrahieren
+                            mehr_link = search_area.find("a", string=re.compile(r"Mehr erfahren", re.IGNORECASE))
+                            if mehr_link:
+                                event_link = mehr_link.get("href", "")
+
+                            # Beschreibung: Text zwischen Titel und "Wann"
+                            desc_div = search_area.find("div", style=lambda s: s and "font-size:14px" in s)
+                            if desc_div:
+                                desc_text = desc_div.get_text(" ", strip=True)
+                                # Kürze bei "Wann:" oder "Mehr erfahren"
+                                for cutoff in ["Wann:", "Wann ", "Mehr erfahren"]:
+                                    if cutoff in desc_text:
+                                        desc_text = desc_text.split(cutoff)[0]
+                                description = desc_text[:500].strip()
+
+                        if not event_date:
+                            continue
+
+                        if event_date.date() < now.date():
+                            continue
+
+                        # Venue
+                        venue_name = "Urban Nation Museum"
+                        venue_address = "Bülowstraße 7, 10783 Berlin"
+                        venue_slug = get_or_create_venue(
+                            name=venue_name,
+                            adresse=venue_address,
+                            bezirk="schoeneberg",
+                            url="https://urban-nation.com",
+                        )
+
+                        # Event-Typ
+                        title_lower = title.lower()
+                        if "ausstellung" in title_lower or "exhibition" in title_lower:
+                            event_type = "ausstellung"
+                        elif "book launch" in title_lower or "buchvorstellung" in title_lower:
+                            event_type = "lesung"
+                        elif "talk" in title_lower or "gespräch" in title_lower or "diskussion" in title_lower:
+                            event_type = "diskussion"
+                        elif "film" in title_lower or "screening" in title_lower:
+                            event_type = "film"
+                        elif "konzert" in title_lower or "concert" in title_lower or "music" in title_lower:
+                            event_type = "konzert"
+                        else:
+                            event_type = "ausstellung"
+
+                        event_id = hashlib.md5(
+                            f"urban-nation-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                        ).hexdigest()[:12]
+
+                        events.append({
+                            "id": event_id,
+                            "title": title[:200],
+                            "date": event_date,
+                            "time": event_date.strftime("%H:%M"),
+                            "venue_slug": venue_slug,
+                            "venue_name": venue_name,
+                            "venue_address": venue_address,
+                            "bezirk": "schoeneberg",
+                            "type": event_type,
+                            "description": description,
+                            "link": event_link if event_link else "https://urban-nation.com",
+                            "source": "newsletter_urban_nation",
+                            "is_free": is_free,
+                        })
+
+                    except Exception:
                         continue
-
-                    # Uhrzeit suchen
-                    time_match = re.search(r"(\d{1,2}):(\d{2})", line)
-                    if time_match:
-                        hour = int(time_match.group(1))
-                        minute = int(time_match.group(2))
-                    else:
-                        time_match2 = re.search(r"(\d{1,2})\s*Uhr", line, re.IGNORECASE)
-                        hour = int(time_match2.group(1)) if time_match2 else 19
-                        minute = 0
-
-                    try:
-                        event_date = datetime(year, month, day, hour, minute)
-                    except ValueError:
-                        continue
-
-                    if event_date.date() < now.date():
-                        continue
-
-                    # Titel: Text um das Datum herum
-                    # Entferne Datum aus der Zeile für den Titel
-                    title = re.sub(r"\d{1,2}\.\s*\w+\s*\d{4}", "", line)
-                    title = re.sub(r"\d{1,2}\.\d{1,2}\.\d{4}", "", title)
-                    title = re.sub(r"\d{1,2}:\d{2}", "", title)
-                    title = re.sub(r"\d{1,2}\s*Uhr", "", title, flags=re.IGNORECASE)
-                    title = re.sub(r"^[\s,|\-–:]+", "", title)
-                    title = re.sub(r"[\s,|\-–:]+$", "", title)
-                    title = title.strip()
-
-                    if not title or len(title) < 5:
-                        # Versuche nächste Zeile als Titel
-                        if i + 1 < len(lines):
-                            title = lines[i + 1].strip()
-
-                    if not title or len(title) < 5:
-                        continue
-
-                    # Filter: Kinderveranstaltungen
-                    title_lower = title.lower()
-                    if any(p in title_lower for p in BLOCKED_PATTERNS):
-                        continue
-
-                    # Event-Typ
-                    if "ausstellung" in title_lower or "exhibition" in title_lower:
-                        event_type = "ausstellung"
-                    elif "konzert" in title_lower or "concert" in title_lower:
-                        event_type = "konzert"
-                    elif "lesung" in title_lower or "reading" in title_lower:
-                        event_type = "lesung"
-                    elif "film" in title_lower or "screening" in title_lower:
-                        event_type = "film"
-                    elif "führung" in title_lower or "tour" in title_lower:
-                        event_type = "diskussion"
-                    elif "vortrag" in title_lower or "talk" in title_lower or "gespräch" in title_lower:
-                        event_type = "diskussion"
-                    else:
-                        event_type = "ausstellung"
-
-                    event_id = hashlib.md5(
-                        f"newsletter-{venue_info['name'][:20]}-{title[:30]}-{event_date.strftime('%Y-%m-%d')}".encode()
-                    ).hexdigest()[:12]
-
-                    events.append({
-                        "id": event_id,
-                        "title": title[:200],
-                        "date": event_date,
-                        "time": f"{hour:02d}:{minute:02d}",
-                        "venue_slug": venue_slug,
-                        "venue_name": venue_info["name"],
-                        "venue_address": venue_info["address"],
-                        "bezirk": venue_info["bezirk"],
-                        "type": event_type,
-                        "description": "",
-                        "link": venue_info["url"],
-                        "source": "newsletter_rss",
-                    })
 
             except Exception:
                 continue
@@ -8456,6 +8425,462 @@ def scrape_einstein_forum() -> list[dict]:
     return events
 
 
+def scrape_mfk_berlin() -> list[dict]:
+    """Scraped Events vom Museum für Kommunikation Berlin via JSON-LD."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Museum für Kommunikation Berlin"
+    venue_address = "Leipziger Straße 16, 10117 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.mfk-berlin.de",
+    )
+
+    # Filter für unerwünschte Events
+    BLOCKED_PATTERNS = [
+        "führung", "tour", "highlight-führung",
+        "kinder", "familien", "kids",
+        "workshop", "werkstatt",
+    ]
+
+    try:
+        resp = requests.get(
+            "https://www.mfk-berlin.de/?format=list",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        html = resp.text
+
+        # JSON-LD Blöcke extrahieren
+        soup = BeautifulSoup(html, "html.parser")
+        json_ld_scripts = soup.find_all("script", type="application/ld+json")
+
+        for script in json_ld_scripts:
+            try:
+                data = json.loads(script.string)
+                # Kann ein Array oder einzelnes Objekt sein
+                if isinstance(data, list):
+                    items = data
+                else:
+                    items = [data]
+
+                for item in items:
+                    if item.get("@type") != "Event":
+                        continue
+
+                    title = item.get("name", "")
+                    if not title:
+                        continue
+
+                    # Filter anwenden
+                    title_lower = title.lower()
+                    if any(p in title_lower for p in BLOCKED_PATTERNS):
+                        continue
+
+                    # Datum parsen
+                    start_date_str = item.get("startDate", "")
+                    if not start_date_str:
+                        continue
+
+                    try:
+                        # ISO-Format: 2026-03-01T15:00:00+01:00
+                        event_date = datetime.fromisoformat(start_date_str.replace("Z", "+00:00"))
+                        # Konvertiere zu naive datetime
+                        event_date = event_date.replace(tzinfo=None)
+                    except ValueError:
+                        continue
+
+                    if event_date.date() < now.date():
+                        continue
+
+                    # Beschreibung (HTML-Tags entfernen)
+                    description = item.get("description", "")
+                    if description:
+                        desc_soup = BeautifulSoup(description, "html.parser")
+                        description = desc_soup.get_text(" ", strip=True)[:300]
+
+                    # Link
+                    event_link = item.get("url", "https://www.mfk-berlin.de/")
+
+                    # Event-Typ
+                    if "vortrag" in title_lower or "talk" in title_lower:
+                        event_type = "vortrag"
+                    elif "lesung" in title_lower:
+                        event_type = "lesung"
+                    elif "konzert" in title_lower:
+                        event_type = "konzert"
+                    elif "film" in title_lower:
+                        event_type = "film"
+                    elif "ausstellung" in title_lower:
+                        event_type = "ausstellung"
+                    else:
+                        event_type = "vortrag"
+
+                    time_str = event_date.strftime("%H:%M")
+
+                    event_id = hashlib.md5(
+                        f"mfk-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                    ).hexdigest()[:12]
+
+                    events.append({
+                        "id": event_id,
+                        "title": title,
+                        "date": event_date,
+                        "time": time_str,
+                        "venue_slug": venue_slug,
+                        "venue_name": venue_name,
+                        "venue_address": venue_address,
+                        "bezirk": "mitte",
+                        "type": event_type,
+                        "description": description,
+                        "link": event_link,
+                        "source": "mfk-berlin",
+                    })
+
+            except (json.JSONDecodeError, Exception):
+                continue
+
+    except Exception as e:
+        print(f"[MfK Berlin] Fehler: {e}")
+
+    print(f"[MfK Berlin] {len(events)} Events geladen")
+    return events
+
+
+def scrape_co_berlin() -> list[dict]:
+    """Scraped Events von C/O Berlin."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "C/O Berlin"
+    venue_address = "Hardenbergstraße 22-24, 10623 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="charlottenburg-wilmersdorf",
+        url="https://co-berlin.org",
+    )
+
+    # Filter: nur relevante Event-Typen
+    WANTED_TYPES = ["artist talk", "gespräch", "vortrag", "lesung", "film", "diskussion", "symposium"]
+    BLOCKED_PATTERNS = ["führung", "tour", "workshop", "kinder", "familien", "schüler"]
+
+    try:
+        resp = requests.get(
+            "https://co-berlin.org/de/programm/kalender",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events aus der Kalender-Seite extrahieren
+        event_links = soup.select("a[href*='/de/veranstaltungen/']")
+
+        for link in event_links:
+            try:
+                href = link.get("href", "")
+                if not href or "/de/veranstaltungen/" not in href:
+                    continue
+
+                # Titel aus dem Link-Text oder h3
+                title_elem = link.find(["h2", "h3", "h4"]) or link
+                title = title_elem.get_text(strip=True)
+                if not title or len(title) < 3:
+                    continue
+
+                title_lower = title.lower()
+
+                # Filter
+                if any(p in title_lower for p in BLOCKED_PATTERNS):
+                    continue
+
+                # Datum finden (im Parent oder Geschwister)
+                parent = link.parent
+                if parent:
+                    parent = parent.parent
+                date_text = ""
+                if parent:
+                    date_elem = parent.find(string=re.compile(r"\d{1,2}\.\s*\w+\s*\d{4}|\d{1,2}\.\s*(Jan|Feb|Mär|Apr|Mai|Jun|Jul|Aug|Sep|Okt|Nov|Dez)", re.IGNORECASE))
+                    if date_elem:
+                        date_text = str(date_elem)
+
+                if not date_text:
+                    # Suche in der ganzen Link-Umgebung
+                    container = link.find_parent(class_=re.compile(r"event|item|card", re.IGNORECASE))
+                    if container:
+                        text = container.get_text(" ", strip=True)
+                        date_match = re.search(r"(\d{1,2})\.\s*(\w+)\s*(\d{4})?", text)
+                        if date_match:
+                            date_text = date_match.group(0)
+
+                # Datum parsen
+                event_date = None
+                if date_text:
+                    MONTHS = {
+                        "jan": 1, "feb": 2, "mär": 3, "mar": 3, "apr": 4,
+                        "mai": 5, "jun": 6, "jul": 7, "aug": 8,
+                        "sep": 9, "okt": 10, "oct": 10, "nov": 11, "dez": 12, "dec": 12
+                    }
+                    match = re.search(r"(\d{1,2})\.\s*(\w{3,})\s*(\d{4})?", date_text, re.IGNORECASE)
+                    if match:
+                        day = int(match.group(1))
+                        month_name = match.group(2).lower()[:3]
+                        year = int(match.group(3)) if match.group(3) else now.year
+                        month = MONTHS.get(month_name, 0)
+                        if month > 0:
+                            try:
+                                event_date = datetime(year, month, day, 19, 0)
+                            except ValueError:
+                                pass
+
+                if not event_date or event_date.date() < now.date():
+                    continue
+
+                # Event-Typ
+                if "film" in title_lower or "screening" in title_lower:
+                    event_type = "film"
+                elif "talk" in title_lower or "gespräch" in title_lower:
+                    event_type = "diskussion"
+                elif "lesung" in title_lower:
+                    event_type = "lesung"
+                else:
+                    event_type = "vortrag"
+
+                event_link = f"https://co-berlin.org{href}" if href.startswith("/") else href
+
+                event_id = hashlib.md5(
+                    f"co-berlin-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": "19:00",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "charlottenburg-wilmersdorf",
+                    "type": event_type,
+                    "description": "",
+                    "link": event_link,
+                    "source": "co-berlin",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[C/O Berlin] Fehler: {e}")
+
+    # Duplikate entfernen
+    seen = set()
+    unique_events = []
+    for ev in events:
+        key = f"{ev['title'][:30]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique_events.append(ev)
+
+    print(f"[C/O Berlin] {len(unique_events)} Events geladen")
+    return unique_events
+
+
+def scrape_technikmuseum() -> list[dict]:
+    """Scraped Events vom Deutschen Technikmuseum Berlin."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Deutsches Technikmuseum"
+    venue_address = "Trebbiner Straße 9, 10963 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="friedrichshain-kreuzberg",
+        url="https://technikmuseum.berlin",
+    )
+
+    # Filter
+    BLOCKED_PATTERNS = [
+        "führung", "tour",
+        "kinder", "familien", "kids", "schüler",
+        "workshop", "werkstatt",
+    ]
+
+    try:
+        # Kalender-API probieren
+        resp = requests.get(
+            "https://technikmuseum.berlin/kalender/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Suche nach Event-Elementen
+        event_items = soup.select(".event-item, .calendar-event, article.event, .veranstaltung")
+
+        for item in event_items:
+            try:
+                title_elem = item.find(["h2", "h3", "h4", "a"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    continue
+
+                title_lower = title.lower()
+                if any(p in title_lower for p in BLOCKED_PATTERNS):
+                    continue
+
+                # Datum
+                date_text = item.get_text(" ", strip=True)
+                event_date = None
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", date_text)
+                if date_match:
+                    day = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    year = int(date_match.group(3))
+                    try:
+                        event_date = datetime(year, month, day, 19, 0)
+                    except ValueError:
+                        pass
+
+                if not event_date or event_date.date() < now.date():
+                    continue
+
+                # Link
+                link_elem = item.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = f"https://technikmuseum.berlin{href}" if href.startswith("/") else (href or "https://technikmuseum.berlin/kalender/")
+
+                event_id = hashlib.md5(
+                    f"technikmuseum-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": "19:00",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "friedrichshain-kreuzberg",
+                    "type": "vortrag",
+                    "description": "",
+                    "link": event_link,
+                    "source": "technikmuseum",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Technikmuseum] Fehler: {e}")
+
+    print(f"[Technikmuseum] {len(events)} Events geladen")
+    return events
+
+
+def scrape_gropius_bau() -> list[dict]:
+    """Scraped Events vom Gropius Bau (Berliner Festspiele)."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Gropius Bau"
+    venue_address = "Niederkirchnerstraße 7, 10963 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="friedrichshain-kreuzberg",
+        url="https://www.berlinerfestspiele.de/gropiusbau",
+    )
+
+    # Filter
+    BLOCKED_PATTERNS = [
+        "führung", "tour",
+        "kinder", "familien", "kids", "schüler",
+        "workshop",
+    ]
+
+    try:
+        # Programm-Seite mit Filter auf Gropius Bau
+        resp = requests.get(
+            "https://www.berlinerfestspiele.de/de/gropiusbau/programm/kalender.html",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # JSON-LD oder Event-Elemente suchen
+        json_ld = soup.find("script", type="application/ld+json")
+        if json_ld:
+            try:
+                data = json.loads(json_ld.string)
+                if isinstance(data, list):
+                    for item in data:
+                        if item.get("@type") == "Event":
+                            title = item.get("name", "")
+                            if not title:
+                                continue
+                            title_lower = title.lower()
+                            if any(p in title_lower for p in BLOCKED_PATTERNS):
+                                continue
+
+                            start_date = item.get("startDate", "")
+                            if start_date:
+                                try:
+                                    event_date = datetime.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
+                                    if event_date.date() >= now.date():
+                                        event_id = hashlib.md5(f"gropius-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()).hexdigest()[:12]
+                                        events.append({
+                                            "id": event_id,
+                                            "title": title,
+                                            "date": event_date,
+                                            "time": event_date.strftime("%H:%M"),
+                                            "venue_slug": venue_slug,
+                                            "venue_name": venue_name,
+                                            "venue_address": venue_address,
+                                            "bezirk": "friedrichshain-kreuzberg",
+                                            "type": "ausstellung",
+                                            "description": item.get("description", "")[:300],
+                                            "link": item.get("url", "https://www.berlinerfestspiele.de/gropiusbau"),
+                                            "source": "gropius-bau",
+                                        })
+                                except ValueError:
+                                    pass
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback: Event-Elemente parsen
+        event_cards = soup.select(".event-card, .program-item, article.event")
+        for card in event_cards:
+            try:
+                title_elem = card.find(["h2", "h3", "h4"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    continue
+
+                title_lower = title.lower()
+                if any(p in title_lower for p in BLOCKED_PATTERNS):
+                    continue
+
+                # Weitere Verarbeitung falls nötig
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Gropius Bau] Fehler: {e}")
+
+    print(f"[Gropius Bau] {len(events)} Events geladen")
+    return events
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8594,6 +9019,18 @@ def refresh_cache():
     # Einstein Forum (iCal)
     all_events.extend(scrape_einstein_forum())
 
+    # Museum für Kommunikation Berlin
+    all_events.extend(scrape_mfk_berlin())
+
+    # C/O Berlin
+    all_events.extend(scrape_co_berlin())
+
+    # Deutsches Technikmuseum
+    all_events.extend(scrape_technikmuseum())
+
+    # Gropius Bau
+    all_events.extend(scrape_gropius_bau())
+
     # Deutsches Spionagemuseum
     all_events.extend(scrape_spionagemuseum())
 
@@ -8627,9 +9064,8 @@ def refresh_cache():
     # Kreativhaus Berlin
     all_events.extend(scrape_kreativhaus())
 
-    # Newsletter RSS (Urban Nation, Akademie der Künste, Berliner Unterwelten)
-    # Deaktiviert - Newsletter-Parsing zu unzuverlässig, liefert fehlerhafte Events
-    # all_events.extend(scrape_newsletter_rss())
+    # Newsletter RSS (Urban Nation)
+    all_events.extend(scrape_newsletter_rss())
 
     # Museumsportal Berlin (aus manuell gepflegter JSON-Datei)
     all_events.extend(load_museumsportal_from_json())
