@@ -4769,7 +4769,10 @@ def scrape_annefrank() -> list[dict]:
         "neuruppin", "wanderausstellung", "erfurt", "leipzig", "hamburg",
         "münchen", "köln", "frankfurt", "düsseldorf", "schulprojekt",
         "weimar", "arnsberg", "führung", "familienführung", "tandemführung",
+        "gebärdensprache", "für familien",
     ]
+    # Diese Keywords sind OK (Lesungen, Vorträge)
+    ALLOWED_KEYWORDS = ["lesung", "vortrag", "gespräch", "diskussion", "podium"]
 
     try:
         resp = requests.get(
@@ -7763,15 +7766,27 @@ def scrape_kreativhaus() -> list[dict]:
     events = []
     now = datetime.now()
 
-    # Blockliste für Titel (Familien-/Kinderveranstaltungen)
+    # Blockliste für Titel (Familien-/Kinderveranstaltungen, Kurse, Senioren)
     BLOCKED_TITLE_PATTERNS = [
+        # Kinder/Familie
         "kinder", "kids", "familie", "familien", "eltern",
         "baby", "krabbel", "spiel-raum", "spiel-bau",
         "mitmach-märchen", "puppentheater", "1-4 jahre", "1-6 jahre",
         "ab 4 jahr", "ab 3 jahr", "für kinder",
-        "silver dancer",  # Seniorenveranstaltung
-        "deutschkurs für eltern",
-        "mutter-kind", "vater-kind",
+        "tiny dancer", "mutter-kind", "vater-kind",
+        # Senioren
+        "silver dancer", "seniorinnen", "senioren", "junggeblieben",
+        "locker vom hocker",
+        # Kurse/Sport
+        "deutschkurs", "deutsch lernen", "spielend deutsch", "sprachcafe",
+        "yoga", "pilates", "gymnastik", "fitness", "aerobic",
+        "let's dance", "lets dance",
+        # Beratung
+        "clearing", "beratung",
+        # Handarbeit
+        "nähkurs", "strickkurs",
+        # Technik-Hilfe
+        "digital-treff", "digitaltreff",
     ]
 
     venue_name = "Kreativhaus Berlin"
@@ -8540,9 +8555,8 @@ def refresh_cache():
     # nGbK (neue Gesellschaft für bildende Kunst)
     all_events.extend(scrape_ngbk())
 
-    # Anne Frank Zentrum
-    # Anne Frank Zentrum (nur Führungen/Wanderausstellungen, keine passenden Events)
-    # all_events.extend(scrape_annefrank())
+    # Anne Frank Zentrum (Lesungen, Vorträge - keine Führungen/Wanderausstellungen)
+    all_events.extend(scrape_annefrank())
 
     # Haus am Waldsee
     all_events.extend(scrape_hausamwaldsee())
@@ -8614,7 +8628,8 @@ def refresh_cache():
     all_events.extend(scrape_kreativhaus())
 
     # Newsletter RSS (Urban Nation, Akademie der Künste, Berliner Unterwelten)
-    all_events.extend(scrape_newsletter_rss())
+    # Deaktiviert - Newsletter-Parsing zu unzuverlässig, liefert fehlerhafte Events
+    # all_events.extend(scrape_newsletter_rss())
 
     # Museumsportal Berlin (aus manuell gepflegter JSON-Datei)
     all_events.extend(load_museumsportal_from_json())
