@@ -9899,6 +9899,1041 @@ def scrape_rambazamba() -> list[dict]:
     return events
 
 
+def scrape_bbooks() -> list[dict]:
+    """Scraped Events von b_books."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "b_books"
+    venue_address = "Lübbener Straße 14, 10997 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="friedrichshain-kreuzberg",
+        url="https://www.bbooks.de",
+    )
+
+    MONTHS = {
+        "januar": 1, "february": 2, "februar": 2, "march": 3, "märz": 3,
+        "april": 4, "may": 5, "mai": 5, "june": 6, "juni": 6,
+        "july": 7, "juli": 7, "august": 8, "september": 9,
+        "october": 10, "oktober": 10, "november": 11, "december": 12, "dezember": 12
+    }
+
+    try:
+        resp = requests.get(
+            "https://www.bbooks.de/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # montagsPRAXIS Events - Datumsformat: "Wednesday, March 4, 2026"
+        text = soup.get_text(" ", strip=True)
+
+        # Suche nach Events mit Datum
+        event_links = soup.select("a[href*='montagspraxis'], a[href*='unterproduktionen']")
+
+        for link in event_links:
+            try:
+                title = link.get_text(strip=True)
+                if not title or len(title) < 5:
+                    continue
+
+                href = link.get("href", "")
+                event_link = f"https://www.bbooks.de{href}" if href.startswith("/") else href
+
+                # Datum im umgebenden Text
+                parent = link.find_parent()
+                if parent:
+                    parent = parent.find_parent()
+                if not parent:
+                    continue
+
+                area_text = parent.get_text(" ", strip=True)
+
+                # Format: "Wednesday, March 4, 2026" oder "Mittwoch, 4. März 2026"
+                date_match = re.search(r"(\w+day),?\s*(\w+)\s+(\d{1,2}),?\s*(\d{4})", area_text, re.IGNORECASE)
+                if not date_match:
+                    date_match = re.search(r"(\d{1,2})\.?\s*(\w+)\s*(\d{4})", area_text)
+
+                if not date_match:
+                    continue
+
+                if len(date_match.groups()) == 4:
+                    month_name = date_match.group(2).lower()
+                    day = int(date_match.group(3))
+                    year = int(date_match.group(4))
+                else:
+                    day = int(date_match.group(1))
+                    month_name = date_match.group(2).lower()
+                    year = int(date_match.group(3))
+
+                month = MONTHS.get(month_name, 0)
+                if month == 0:
+                    continue
+
+                # Zeit suchen
+                time_match = re.search(r"(\d{1,2}):(\d{2})\s*(pm|am)?", area_text, re.IGNORECASE)
+                hour = 19
+                minute = 0
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = int(time_match.group(2))
+                    if time_match.group(3) and time_match.group(3).lower() == "pm" and hour < 12:
+                        hour += 12
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                event_id = hashlib.md5(
+                    f"bbooks-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "friedrichshain-kreuzberg",
+                    "type": "diskussion",
+                    "description": "",
+                    "link": event_link,
+                    "source": "bbooks",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[b_books] Fehler: {e}")
+
+    print(f"[b_books] {len(events)} Events geladen")
+    return events
+
+
+def scrape_pro_qm() -> list[dict]:
+    """Scraped Events von pro qm."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "pro qm"
+    venue_address = "Almstadtstraße 48-50, 10119 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://pro-qm.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://pro-qm.de/events",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events in li-Elementen mit Datum "DD.MM.YYYY, HH:MM"
+        event_items = soup.select("li")
+
+        for item in event_items:
+            try:
+                # Datum im Text
+                text = item.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4}),?\s*(\d{1,2}):(\d{2})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+                hour = int(date_match.group(4))
+                minute = int(date_match.group(5))
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel aus h3
+                title_elem = item.find("h3")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    # Fallback: erster Link
+                    link_elem = item.find("a")
+                    title = link_elem.get_text(strip=True) if link_elem else ""
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Link
+                link_elem = item.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = f"https://pro-qm.de{href}" if href.startswith("/") else (href or "https://pro-qm.de/events")
+
+                # Beschreibung
+                desc_elem = item.find("p")
+                description = desc_elem.get_text(strip=True)[:300] if desc_elem else ""
+
+                event_id = hashlib.md5(
+                    f"proqm-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "mitte",
+                    "type": "lesung",
+                    "description": description,
+                    "link": event_link,
+                    "source": "pro-qm",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[pro qm] Fehler: {e}")
+
+    print(f"[pro qm] {len(events)} Events geladen")
+    return events
+
+
+def scrape_august_bebel() -> list[dict]:
+    """Scraped Events vom August Bebel Institut."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "August Bebel Institut"
+    venue_address = "Müllerstraße 163, 13353 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://august-bebel-institut.de",
+    )
+
+    MONTHS = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12
+    }
+
+    try:
+        resp = requests.get(
+            "https://august-bebel-institut.de/events/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events in Karten-Format
+        event_cards = soup.select("article, .event-card, .tribe-events-calendar-list__event")
+
+        for card in event_cards:
+            try:
+                # Titel
+                title_elem = card.find(["h2", "h3", "h4"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title or len(title) < 5:
+                    continue
+
+                # Datum: "Sa. 21. März 2026" oder "11:30 – 13:30 Uhr"
+                text = card.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{1,2})\.?\s*(\w+)\s*(\d{4})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month_name = date_match.group(2).lower()
+                year = int(date_match.group(3))
+
+                month = MONTHS.get(month_name, 0)
+                if month == 0:
+                    continue
+
+                # Zeit
+                time_match = re.search(r"(\d{1,2}):(\d{2})\s*(?:–|Uhr)", text)
+                hour = int(time_match.group(1)) if time_match else 18
+                minute = int(time_match.group(2)) if time_match else 0
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Link
+                link_elem = card.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = href if href.startswith("http") else f"https://august-bebel-institut.de{href}"
+
+                event_id = hashlib.md5(
+                    f"bebel-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "mitte",
+                    "type": "workshop",
+                    "description": "",
+                    "link": event_link,
+                    "source": "august-bebel",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[August Bebel] Fehler: {e}")
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for ev in events:
+        key = f"{ev['title'][:30]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+
+    print(f"[August Bebel] {len(unique)} Events geladen")
+    return unique
+
+
+def scrape_ffbiz() -> list[dict]:
+    """Scraped Events vom FFBIZ (Frauenforschungs-, -bildungs- und -informationszentrum)."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "FFBIZ"
+    venue_address = "Eldenaer Straße 35, 10247 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="friedrichshain-kreuzberg",
+        url="https://www.ffbiz.de",
+    )
+
+    MONTHS = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12
+    }
+
+    try:
+        resp = requests.get(
+            "https://www.ffbiz.de/aktivitaeten/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events in article.event
+        event_articles = soup.select("article.event, li.event, .event")
+
+        for article in event_articles:
+            try:
+                # Titel
+                title_elem = article.find(["h2", "h3"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title or len(title) < 5:
+                    continue
+
+                # Datum/Zeit in span.time
+                time_elem = article.find("span", class_="time")
+                text = time_elem.get_text(" ", strip=True) if time_elem else article.get_text(" ", strip=True)
+
+                date_match = re.search(r"(\d{1,2})\.?\s*(\w+)\s*(\d{4})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month_name = date_match.group(2).lower()
+                year = int(date_match.group(3))
+
+                month = MONTHS.get(month_name, 0)
+                if month == 0:
+                    continue
+
+                time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+                hour = int(time_match.group(1)) if time_match else 18
+                minute = int(time_match.group(2)) if time_match else 0
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Link
+                link_elem = article.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = f"https://www.ffbiz.de{href}" if href.startswith("/") else (href or "https://www.ffbiz.de/aktivitaeten/veranstaltungen")
+
+                event_id = hashlib.md5(
+                    f"ffbiz-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "friedrichshain-kreuzberg",
+                    "type": "workshop",
+                    "description": "",
+                    "link": event_link,
+                    "source": "ffbiz",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[FFBIZ] Fehler: {e}")
+
+    print(f"[FFBIZ] {len(events)} Events geladen")
+    return events
+
+
+def scrape_zabriskie() -> list[dict]:
+    """Scraped Events von Zabriskie Buchladen."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Zabriskie"
+    venue_address = "Manteuffelstraße 73, 10999 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="friedrichshain-kreuzberg",
+        url="https://zabriskie.de",
+    )
+
+    MONTHS = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12
+    }
+
+    try:
+        resp = requests.get(
+            "https://zabriskie.de/blogs/lesungen-und-prasentationen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events als Blog-Artikel
+        articles = soup.select("article, .blog-post, .event-card")
+
+        for article in articles:
+            try:
+                # Titel
+                title_elem = article.find(["h2", "h3"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title or len(title) < 5:
+                    continue
+
+                # Datum: "Sat, Mar 14, 2026 at 7:00 PM"
+                text = article.get_text(" ", strip=True)
+
+                # Überspringe beendete Events
+                if "Event finished" in text or "finished" in text.lower():
+                    continue
+
+                date_match = re.search(r"(\w{3}),?\s*(\w{3})\s*(\d{1,2}),?\s*(\d{4})\s*at\s*(\d{1,2}):(\d{2})\s*(PM|AM)?", text, re.IGNORECASE)
+                if not date_match:
+                    continue
+
+                month_name = date_match.group(2).lower()
+                day = int(date_match.group(3))
+                year = int(date_match.group(4))
+                hour = int(date_match.group(5))
+                minute = int(date_match.group(6))
+                ampm = date_match.group(7)
+
+                month = MONTHS.get(month_name, 0)
+                if month == 0:
+                    continue
+
+                if ampm and ampm.upper() == "PM" and hour < 12:
+                    hour += 12
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Link
+                link_elem = article.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = f"https://zabriskie.de{href}" if href.startswith("/") else (href or "https://zabriskie.de/blogs/lesungen-und-prasentationen")
+
+                event_id = hashlib.md5(
+                    f"zabriskie-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "friedrichshain-kreuzberg",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "zabriskie",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Zabriskie] Fehler: {e}")
+
+    print(f"[Zabriskie] {len(events)} Events geladen")
+    return events
+
+
+def scrape_buchbox() -> list[dict]:
+    """Scraped Events von Buchbox Berlin."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Buchbox"
+    venue_address = "Wörther Straße 16, 10405 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="pankow",
+        url="https://www.buchboxberlin.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.buchboxberlin.de/veranstaltungen",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events mit Datum "12.03.2026 | 20:00 Uhr"
+        event_cards = soup.select("article, .event-item, .veranstaltung")
+
+        for card in event_cards:
+            try:
+                text = card.get_text(" ", strip=True)
+
+                # Datum und Zeit
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\s*\|?\s*(\d{1,2}):(\d{2})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+                hour = int(date_match.group(4))
+                minute = int(date_match.group(5))
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel
+                title_elem = card.find(["h2", "h3", "h4"])
+                if not title_elem:
+                    link_elem = card.find("a")
+                    title = link_elem.get_text(strip=True) if link_elem else ""
+                else:
+                    title = title_elem.get_text(strip=True)
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Link
+                link_elem = card.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = f"https://www.buchboxberlin.de{href}" if href.startswith("/") else (href or "https://www.buchboxberlin.de/veranstaltungen")
+
+                event_id = hashlib.md5(
+                    f"buchbox-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "pankow",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "buchbox",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Buchbox] Fehler: {e}")
+
+    print(f"[Buchbox] {len(events)} Events geladen")
+    return events
+
+
+def scrape_geistesblueten() -> list[dict]:
+    """Scraped Events von Geistesblüten Buchhandlung."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Geistesblüten"
+    venue_address = "Mommsensstraße 45, 10629 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="charlottenburg-wilmersdorf",
+        url="https://geistesblueten.com",
+    )
+
+    DAYS = {"montag": 0, "dienstag": 1, "mittwoch": 2, "donnerstag": 3, "freitag": 4, "samstag": 5, "sonntag": 6}
+
+    try:
+        resp = requests.get(
+            "https://geistesblueten.com/events/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events mit Datum "Donnerstag, 12.03.2026" und Zeit "19:00"
+        event_cards = soup.select("article, .event, .veranstaltung, div")
+
+        for card in event_cards:
+            try:
+                text = card.get_text(" ", strip=True)
+
+                # Datum: "Donnerstag, 12.03.2026" oder "12.03.2026"
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+
+                # Zeit
+                time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+                hour = int(time_match.group(1)) if time_match else 19
+                minute = int(time_match.group(2)) if time_match else 0
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel - suche nach Autorname und Buchtitel
+                title_elem = card.find(["h2", "h3", "h4"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Link
+                link_elem = card.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = href if href.startswith("http") else f"https://geistesblueten.com{href}"
+
+                event_id = hashlib.md5(
+                    f"geistesblueten-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "charlottenburg-wilmersdorf",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "geistesblueten",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Geistesblüten] Fehler: {e}")
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for ev in events:
+        key = f"{ev['title'][:30]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+
+    print(f"[Geistesblüten] {len(unique)} Events geladen")
+    return unique
+
+
+def scrape_nicolaische() -> list[dict]:
+    """Scraped Events von Nicolaische Buchhandlung."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Nicolaische Buchhandlung"
+    venue_address = "Rheinstraße 65, 12159 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="tempelhof-schoeneberg",
+        url="https://nicolaische-buchhandlung.buchhandlung.de",
+    )
+
+    try:
+        resp = requests.get(
+            "https://nicolaische-buchhandlung.buchhandlung.de/shop/magazine/131407/veranstaltungen.html",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # JSON-Daten oder Event-Module
+        event_modules = soup.select(".event, .mod_event_teaser_single, article")
+
+        for module in event_modules:
+            try:
+                text = module.get_text(" ", strip=True)
+
+                # Datum: ISO oder deutsches Format
+                date_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+                if not date_match:
+                    date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
+                    if date_match:
+                        day = int(date_match.group(1))
+                        month = int(date_match.group(2))
+                        year = int(date_match.group(3))
+                    else:
+                        continue
+                else:
+                    year = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    day = int(date_match.group(3))
+
+                # Zeit
+                time_match = re.search(r"(\d{1,2}):(\d{2})\s*Uhr", text)
+                hour = int(time_match.group(1)) if time_match else 19
+                minute = int(time_match.group(2)) if time_match else 30
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel
+                title_elem = module.find(["h2", "h3", "h4"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title or len(title) < 5:
+                    continue
+
+                # Link
+                link_elem = module.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = href if href.startswith("http") else f"https://nicolaische-buchhandlung.buchhandlung.de{href}"
+
+                event_id = hashlib.md5(
+                    f"nicolaische-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "tempelhof-schoeneberg",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "nicolaische",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Nicolaische] Fehler: {e}")
+
+    print(f"[Nicolaische] {len(events)} Events geladen")
+    return events
+
+
+def scrape_ocelot() -> list[dict]:
+    """Scraped Events von Ocelot Buchhandlung."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Ocelot"
+    venue_address = "Brunnenstraße 181, 10119 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="mitte",
+        url="https://www.genialokal.de/buchhandlung/berlin/ocelot/",
+    )
+
+    try:
+        resp = requests.get(
+            "https://www.genialokal.de/buchhandlung/berlin/ocelot/Veranstaltungen/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events mit Datum "14.03.2026 19:30 Uhr"
+        event_sections = soup.select("article, .event, .veranstaltung, section")
+
+        for section in event_sections:
+            try:
+                text = section.get_text(" ", strip=True)
+
+                # Datum und Zeit
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})", text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year = int(date_match.group(3))
+                hour = int(date_match.group(4))
+                minute = int(date_match.group(5))
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Titel
+                title_elem = section.find(["h2", "h3", "h4"])
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title or len(title) < 5:
+                    # Versuche ersten starken Text
+                    strong = section.find("strong")
+                    title = strong.get_text(strip=True) if strong else ""
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Link
+                link_elem = section.find("a", href=True)
+                href = link_elem.get("href", "") if link_elem else ""
+                event_link = href if href.startswith("http") else f"https://www.genialokal.de{href}"
+
+                event_id = hashlib.md5(
+                    f"ocelot-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "mitte",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "ocelot",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Ocelot] Fehler: {e}")
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for ev in events:
+        key = f"{ev['title'][:30]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+
+    print(f"[Ocelot] {len(unique)} Events geladen")
+    return unique
+
+
+def scrape_motto_berlin() -> list[dict]:
+    """Scraped Events von Motto Berlin."""
+    events = []
+    now = datetime.now()
+
+    # Motto hat mehrere Standorte
+    venues = {
+        "motto xberg": ("Motto Berlin Kreuzberg", "Skalitzer Straße 68, 10997 Berlin", "friedrichshain-kreuzberg"),
+        "motto berlin": ("Motto Berlin", "Skalitzer Straße 68, 10997 Berlin", "friedrichshain-kreuzberg"),
+        "motto wedding": ("Motto Berlin Wedding", "Gerichtstraße 35, 13347 Berlin", "mitte"),
+    }
+
+    default_venue = venues["motto berlin"]
+
+    try:
+        resp = requests.get(
+            "https://www.mottodistribution.com/site/?page_id=31943",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events: "29.03.2026: Artist @ Venue"
+        text = soup.get_text("\n", strip=True)
+        lines = text.split("\n")
+
+        for line in lines:
+            try:
+                # Format: "29.03.2026: Name @ Motto Xberg"
+                match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4}):\s*(.+?)(?:\s*@\s*(.+))?$", line)
+                if not match:
+                    continue
+
+                day = int(match.group(1))
+                month = int(match.group(2))
+                year = int(match.group(3))
+                title = match.group(4).strip()
+                location = match.group(5).strip().lower() if match.group(5) else "motto berlin"
+
+                if not title or len(title) < 3:
+                    continue
+
+                # Nur Berlin-Veranstaltungen
+                if "paris" in location:
+                    continue
+
+                try:
+                    event_date = datetime(year, month, day, 20, 0)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Venue bestimmen
+                venue_info = default_venue
+                for key, info in venues.items():
+                    if key in location:
+                        venue_info = info
+                        break
+
+                venue_name, venue_address, bezirk = venue_info
+                venue_slug = get_or_create_venue(
+                    name=venue_name,
+                    adresse=venue_address,
+                    bezirk=bezirk,
+                    url="https://www.mottodistribution.com",
+                )
+
+                event_id = hashlib.md5(
+                    f"motto-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": "20:00",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": bezirk,
+                    "type": "konzert",
+                    "description": "",
+                    "link": "https://www.mottodistribution.com/site/?page_id=31943",
+                    "source": "motto-berlin",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Motto Berlin] Fehler: {e}")
+
+    print(f"[Motto Berlin] {len(events)} Events geladen")
+    return events
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -10075,6 +11110,18 @@ def refresh_cache():
 
     # RambaZamba Theater (Premieren)
     all_events.extend(scrape_rambazamba())
+
+    # Buchhandlungen und Archive
+    all_events.extend(scrape_bbooks())
+    all_events.extend(scrape_pro_qm())
+    all_events.extend(scrape_august_bebel())
+    all_events.extend(scrape_ffbiz())
+    all_events.extend(scrape_zabriskie())
+    all_events.extend(scrape_buchbox())
+    all_events.extend(scrape_geistesblueten())
+    all_events.extend(scrape_nicolaische())
+    all_events.extend(scrape_ocelot())
+    all_events.extend(scrape_motto_berlin())
 
     # Deutsches Spionagemuseum
     all_events.extend(scrape_spionagemuseum())
