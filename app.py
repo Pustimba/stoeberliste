@@ -9647,6 +9647,258 @@ def scrape_kesselhaus() -> list[dict]:
     return events
 
 
+def scrape_frannz() -> list[dict]:
+    """Scraped Events vom Frannz Club."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "Frannz Club"
+    venue_address = "Schönhauser Allee 36, 10435 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="pankow",
+        url="https://frannz.eu",
+    )
+
+    MONTHS = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+        "jan": 1, "feb": 2, "mär": 3, "apr": 4, "mai": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "okt": 10, "nov": 11, "dez": 12
+    }
+
+    # Filter - nur Lesungen/Kulturelles, keine reinen Partys
+    WANTED_TYPES = ["lesung", "reading", "literatur", "gespräch", "vortrag", "theater", "show"]
+
+    try:
+        resp = requests.get(
+            "https://frannz.eu/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Events in der Seite finden
+        # Struktur: Datum-Header, dann Event-Details
+        text = soup.get_text("\n", strip=True)
+
+        # Suche nach Event-Blöcken mit Datum
+        event_links = soup.select("a[href*='frannz.eu']")
+
+        for link in event_links:
+            try:
+                href = link.get("href", "")
+                title = link.get_text(strip=True)
+
+                if not title or len(title) < 5:
+                    continue
+
+                # Nur kulturelle Events
+                title_lower = title.lower()
+                parent = link.find_parent()
+                parent_text = parent.get_text(" ", strip=True).lower() if parent else ""
+
+                is_cultural = any(t in title_lower or t in parent_text for t in WANTED_TYPES)
+                if not is_cultural:
+                    continue
+
+                # Datum suchen
+                if parent:
+                    parent = parent.find_parent()
+                if not parent:
+                    continue
+
+                area_text = parent.get_text(" ", strip=True)
+
+                # Format: "Donnerstag, 12. März 2026" oder "12.03.2026"
+                date_match = re.search(r"(\d{1,2})\.?\s*(\w+)\s*(\d{4})", area_text)
+                if not date_match:
+                    date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", area_text)
+
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month_str = date_match.group(2)
+                year = int(date_match.group(3))
+
+                if month_str.isdigit():
+                    month = int(month_str)
+                else:
+                    month = MONTHS.get(month_str.lower()[:3], 0)
+                    if month == 0:
+                        continue
+
+                # Zeit suchen
+                time_match = re.search(r"Beginn[:\s]*(\d{1,2}):(\d{2})", area_text)
+                if not time_match:
+                    time_match = re.search(r"(\d{1,2}):(\d{2})", area_text)
+
+                hour = int(time_match.group(1)) if time_match else 20
+                minute = int(time_match.group(2)) if time_match else 0
+
+                try:
+                    event_date = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                event_link = href if href.startswith("http") else f"https://frannz.eu{href}"
+
+                event_id = hashlib.md5(
+                    f"frannz-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "pankow",
+                    "type": "lesung",
+                    "description": "",
+                    "link": event_link,
+                    "source": "frannz",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Frannz] Fehler: {e}")
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for ev in events:
+        key = f"{ev['title'][:30]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(ev)
+
+    print(f"[Frannz] {len(unique)} Events geladen")
+    return unique
+
+
+def scrape_rambazamba() -> list[dict]:
+    """Scraped Premieren vom RambaZamba Theater."""
+    events = []
+    now = datetime.now()
+
+    venue_name = "RambaZamba Theater"
+    venue_address = "Schönhauser Allee 36, 10435 Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse=venue_address,
+        bezirk="pankow",
+        url="https://www.rambazamba-theater.de",
+    )
+
+    MONTHS = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+        "jan": 1, "feb": 2, "mär": 3, "apr": 4, "mai": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "okt": 10, "nov": 11, "dez": 12
+    }
+
+    try:
+        resp = requests.get(
+            "https://www.rambazamba-theater.de/de/premieren",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Premieren als Links mit Datum "Premiere am:"
+        premiere_links = soup.select("a[href*='/de/spielzeiten/']")
+
+        for link in premiere_links:
+            try:
+                title = link.get_text(strip=True)
+                if not title or len(title) < 3:
+                    continue
+
+                href = link.get("href", "")
+                event_link = f"https://www.rambazamba-theater.de{href}" if href.startswith("/") else href
+
+                # Datum suchen in "Premiere am: Mi 29.04.26"
+                parent = link.find_parent()
+                if parent:
+                    parent = parent.find_parent()
+                if not parent:
+                    continue
+
+                area_text = parent.get_text(" ", strip=True)
+
+                # Format: "Premiere am: Mi 29.04.26" oder "Premiere am: Do 05.06.2026"
+                date_match = re.search(r"Premiere\s+am[:\s]*\w+\s+(\d{1,2})\.(\d{1,2})\.(\d{2,4})", area_text)
+                if not date_match:
+                    continue
+
+                day = int(date_match.group(1))
+                month = int(date_match.group(2))
+                year_str = date_match.group(3)
+                year = int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
+
+                try:
+                    event_date = datetime(year, month, day, 19, 30)
+                except ValueError:
+                    continue
+
+                if event_date.date() < now.date():
+                    continue
+
+                # Regie und Autor extrahieren
+                regie_match = re.search(r"Regie:\s*([^\n]+)", area_text)
+                autor_match = re.search(r"Von:\s*([^\n]+)", area_text)
+
+                description = ""
+                if autor_match:
+                    description += f"Von: {autor_match.group(1).strip()}"
+                if regie_match:
+                    if description:
+                        description += " | "
+                    description += f"Regie: {regie_match.group(1).strip()}"
+
+                event_id = hashlib.md5(
+                    f"rambazamba-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                events.append({
+                    "id": event_id,
+                    "title": f"Premiere: {title}",
+                    "date": event_date,
+                    "time": "19:30",
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": "pankow",
+                    "type": "theater",
+                    "description": description[:300],
+                    "link": event_link,
+                    "source": "rambazamba",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[RambaZamba] Fehler: {e}")
+
+    print(f"[RambaZamba] {len(events)} Events geladen")
+    return events
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -9817,6 +10069,12 @@ def refresh_cache():
 
     # Kesselhaus (ohne Konzert, Theater, Party)
     all_events.extend(scrape_kesselhaus())
+
+    # Frannz Club (kulturelle Events)
+    all_events.extend(scrape_frannz())
+
+    # RambaZamba Theater (Premieren)
+    all_events.extend(scrape_rambazamba())
 
     # Deutsches Spionagemuseum
     all_events.extend(scrape_spionagemuseum())
