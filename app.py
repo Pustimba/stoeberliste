@@ -7879,6 +7879,231 @@ def scrape_kreativhaus() -> list[dict]:
     return events
 
 
+def scrape_newsletter_rss() -> list[dict]:
+    """Scraped Events aus Newsletter-RSS-Feed (Kill the Newsletter).
+
+    Extrahiert Events aus HTML-Newslettern von:
+    - Urban Nation
+    - Akademie der Künste
+    - Berliner Unterwelten
+    - etc.
+    """
+    events = []
+    now = datetime.now()
+
+    # Venue-Mapping für Newsletter-Absender
+    VENUE_MAP = {
+        "urban nation": {
+            "name": "Urban Nation Museum",
+            "address": "Bülowstraße 7, 10783 Berlin",
+            "bezirk": "schoeneberg",
+            "url": "https://urban-nation.com",
+        },
+        "akademie der künste": {
+            "name": "Akademie der Künste",
+            "address": "Pariser Platz 4, 10117 Berlin",
+            "bezirk": "mitte",
+            "url": "https://www.adk.de",
+        },
+        "adk": {
+            "name": "Akademie der Künste",
+            "address": "Pariser Platz 4, 10117 Berlin",
+            "bezirk": "mitte",
+            "url": "https://www.adk.de",
+        },
+        "berliner unterwelten": {
+            "name": "Berliner Unterwelten",
+            "address": "Brunnenstraße 105, 13355 Berlin",
+            "bezirk": "mitte",
+            "url": "https://www.berliner-unterwelten.de",
+        },
+    }
+
+    # Blockliste für Kinderveranstaltungen
+    BLOCKED_PATTERNS = [
+        "für kinder", "kinder ab", "familienführung",
+        "ab 3", "ab 4", "ab 5", "ab 6", "ab 7", "ab 8",
+        "workshop für kinder", "kinderworkshop",
+    ]
+
+    try:
+        resp = requests.get(
+            "https://kill-the-newsletter.com/feeds/du5hw4itlnha39i0cmv2.xml",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+        # Atom-Feed parsen
+        soup = BeautifulSoup(resp.text, "xml")
+
+        for entry in soup.find_all("entry"):
+            try:
+                entry_title = entry.find("title")
+                if not entry_title:
+                    continue
+                newsletter_title = entry_title.get_text(strip=True).lower()
+
+                # Venue bestimmen
+                venue_info = None
+                for key, info in VENUE_MAP.items():
+                    if key in newsletter_title:
+                        venue_info = info
+                        break
+
+                if not venue_info:
+                    # Unbekannter Newsletter, überspringen
+                    continue
+
+                venue_slug = get_or_create_venue(
+                    name=venue_info["name"],
+                    adresse=venue_info["address"],
+                    bezirk=venue_info["bezirk"],
+                    url=venue_info["url"],
+                )
+
+                # HTML-Content des Newsletters
+                content_elem = entry.find("content")
+                if not content_elem:
+                    continue
+                html_content = content_elem.get_text()
+
+                # HTML parsen
+                content_soup = BeautifulSoup(html_content, "html.parser")
+                text_content = content_soup.get_text(" ", strip=True)
+
+                # Events im Newsletter-Text finden
+                # Suche nach Datum-Mustern: "15. März 2026", "15.03.2026", etc.
+                # und extrahiere umgebenden Text als Event-Titel
+
+                # Pattern 1: "DD. Monat YYYY"
+                months = {
+                    "januar": 1, "februar": 2, "märz": 3, "april": 4,
+                    "mai": 5, "juni": 6, "juli": 7, "august": 8,
+                    "september": 9, "oktober": 10, "november": 11, "dezember": 12
+                }
+
+                # Suche nach Datum + Text Kombinationen
+                lines = text_content.split("\n")
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Datum suchen
+                    date_match = re.search(r"(\d{1,2})\.\s*(\w+)\s*(\d{4})", line.lower())
+                    if date_match:
+                        day = int(date_match.group(1))
+                        month_name = date_match.group(2)
+                        year = int(date_match.group(3))
+                        month = months.get(month_name, 0)
+                    else:
+                        date_match2 = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", line)
+                        if date_match2:
+                            day = int(date_match2.group(1))
+                            month = int(date_match2.group(2))
+                            year = int(date_match2.group(3))
+                        else:
+                            continue
+
+                    if month == 0:
+                        continue
+
+                    # Uhrzeit suchen
+                    time_match = re.search(r"(\d{1,2}):(\d{2})", line)
+                    if time_match:
+                        hour = int(time_match.group(1))
+                        minute = int(time_match.group(2))
+                    else:
+                        time_match2 = re.search(r"(\d{1,2})\s*Uhr", line, re.IGNORECASE)
+                        hour = int(time_match2.group(1)) if time_match2 else 19
+                        minute = 0
+
+                    try:
+                        event_date = datetime(year, month, day, hour, minute)
+                    except ValueError:
+                        continue
+
+                    if event_date.date() < now.date():
+                        continue
+
+                    # Titel: Text um das Datum herum
+                    # Entferne Datum aus der Zeile für den Titel
+                    title = re.sub(r"\d{1,2}\.\s*\w+\s*\d{4}", "", line)
+                    title = re.sub(r"\d{1,2}\.\d{1,2}\.\d{4}", "", title)
+                    title = re.sub(r"\d{1,2}:\d{2}", "", title)
+                    title = re.sub(r"\d{1,2}\s*Uhr", "", title, flags=re.IGNORECASE)
+                    title = re.sub(r"^[\s,|\-–:]+", "", title)
+                    title = re.sub(r"[\s,|\-–:]+$", "", title)
+                    title = title.strip()
+
+                    if not title or len(title) < 5:
+                        # Versuche nächste Zeile als Titel
+                        if i + 1 < len(lines):
+                            title = lines[i + 1].strip()
+
+                    if not title or len(title) < 5:
+                        continue
+
+                    # Filter: Kinderveranstaltungen
+                    title_lower = title.lower()
+                    if any(p in title_lower for p in BLOCKED_PATTERNS):
+                        continue
+
+                    # Event-Typ
+                    if "ausstellung" in title_lower or "exhibition" in title_lower:
+                        event_type = "ausstellung"
+                    elif "konzert" in title_lower or "concert" in title_lower:
+                        event_type = "konzert"
+                    elif "lesung" in title_lower or "reading" in title_lower:
+                        event_type = "lesung"
+                    elif "film" in title_lower or "screening" in title_lower:
+                        event_type = "film"
+                    elif "führung" in title_lower or "tour" in title_lower:
+                        event_type = "diskussion"
+                    elif "vortrag" in title_lower or "talk" in title_lower or "gespräch" in title_lower:
+                        event_type = "diskussion"
+                    else:
+                        event_type = "ausstellung"
+
+                    event_id = hashlib.md5(
+                        f"newsletter-{venue_info['name'][:20]}-{title[:30]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                    ).hexdigest()[:12]
+
+                    events.append({
+                        "id": event_id,
+                        "title": title[:200],
+                        "date": event_date,
+                        "time": f"{hour:02d}:{minute:02d}",
+                        "venue_slug": venue_slug,
+                        "venue_name": venue_info["name"],
+                        "venue_address": venue_info["address"],
+                        "bezirk": venue_info["bezirk"],
+                        "type": event_type,
+                        "description": "",
+                        "link": venue_info["url"],
+                        "source": "newsletter_rss",
+                    })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Newsletter RSS] Fehler: {e}")
+
+    # Duplikate entfernen (nach Titel + Datum)
+    seen = set()
+    unique_events = []
+    for ev in events:
+        key = f"{ev['title'][:50]}-{ev['date'].strftime('%Y-%m-%d')}"
+        if key not in seen:
+            seen.add(key)
+            unique_events.append(ev)
+
+    print(f"[Newsletter RSS] {len(unique_events)} Events geladen")
+    return unique_events
+
+
 def scrape_luftschloss() -> list[dict]:
     """Scraped Events vom Luftschloss Tempelhofer Feld via REST API."""
     events = []
@@ -8387,6 +8612,9 @@ def refresh_cache():
 
     # Kreativhaus Berlin
     all_events.extend(scrape_kreativhaus())
+
+    # Newsletter RSS (Urban Nation, Akademie der Künste, Berliner Unterwelten)
+    all_events.extend(scrape_newsletter_rss())
 
     # Museumsportal Berlin (aus manuell gepflegter JSON-Datei)
     all_events.extend(load_museumsportal_from_json())
