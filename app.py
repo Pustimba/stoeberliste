@@ -2001,7 +2001,18 @@ def _fetch_brotfabrik_details(url: str) -> dict:
 
 
 def scrape_brotfabrik() -> list[dict]:
-    """Scraped Events von brotfabrik-berlin.de via iCal-Feed."""
+    """Scraped Events von brotfabrik-berlin.de via iCal-Feed.
+
+    Filtert Kinderveranstaltungen aus.
+    """
+    # Blockliste für Titel (Kinderveranstaltungen)
+    BLOCKED_TITLE_PATTERNS = [
+        "für kinder", "kinder ab",
+        "ab 3", "ab 4", "ab 5", "ab 6", "ab 7", "ab 8",
+        "alle ab 3", "alle ab 4", "alle ab 5", "alle ab 6",
+        "puppentheater", "kindertheater",
+    ]
+
     events = []
     venue_name = "Brotfabrik"
     venue_address = "Caligariplatz 1, 13086 Berlin"
@@ -2052,6 +2063,11 @@ def scrape_brotfabrik() -> list[dict]:
             title = summary_match.group(1).strip()
             # iCal-Escaping rueckgaengig machen
             title = title.replace("\\,", ",").replace("\\n", " ").replace("\\;", ";")
+
+            # Filter: Kinderveranstaltungen ausschließen
+            title_lower = title.lower()
+            if any(pattern in title_lower for pattern in BLOCKED_TITLE_PATTERNS):
+                continue
 
             # Datum/Zeit
             dtstart_match = re.search(r"DTSTART(?:;[^:]+)?:(\d{8}T\d{6})", block)
@@ -7740,9 +7756,23 @@ def scrape_nbk() -> list[dict]:
 
 
 def scrape_kreativhaus() -> list[dict]:
-    """Scraped Events vom Kreativhaus Berlin via REST API (The Events Calendar)."""
+    """Scraped Events vom Kreativhaus Berlin via REST API (The Events Calendar).
+
+    Filtert Familien-/Kinderveranstaltungen aus.
+    """
     events = []
     now = datetime.now()
+
+    # Blockliste für Titel (Familien-/Kinderveranstaltungen)
+    BLOCKED_TITLE_PATTERNS = [
+        "kinder", "kids", "familie", "familien", "eltern",
+        "baby", "krabbel", "spiel-raum", "spiel-bau",
+        "mitmach-märchen", "puppentheater", "1-4 jahre", "1-6 jahre",
+        "ab 4 jahr", "ab 3 jahr", "für kinder",
+        "silver dancer",  # Seniorenveranstaltung
+        "deutschkurs für eltern",
+        "mutter-kind", "vater-kind",
+    ]
 
     venue_name = "Kreativhaus Berlin"
     venue_address = "Fischerinsel 3, 10179 Berlin"
@@ -7768,6 +7798,11 @@ def scrape_kreativhaus() -> list[dict]:
             try:
                 title = item.get("title", "")
                 if not title:
+                    continue
+
+                # Filter: Familien-/Kinderveranstaltungen ausschließen
+                title_lower = title.lower()
+                if any(pattern in title_lower for pattern in BLOCKED_TITLE_PATTERNS):
                     continue
 
                 # Datum parsen
