@@ -10336,7 +10336,7 @@ def scrape_zabriskie() -> list[dict]:
     now = datetime.now()
 
     venue_name = "Zabriskie"
-    venue_address = "Manteuffelstraße 73, 10999 Berlin"
+    venue_address = "Reichenberger Str. 150, 10999 Berlin"
     venue_slug = get_or_create_venue(
         name=venue_name,
         adresse=venue_address,
@@ -10350,27 +10350,46 @@ def scrape_zabriskie() -> list[dict]:
     }
 
     try:
+        # Die Events sind auf der Hauptseite im Veranstaltungen-Abschnitt
         resp = requests.get(
-            "https://zabriskie.de/blogs/lesungen-und-prasentationen",
+            "https://zabriskie.de",
             headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
             timeout=15,
         )
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Events als Blog-Artikel
-        articles = soup.select("article, .blog-post, .event-card")
+        # Finde die Veranstaltungen-Sektion
+        veranstaltungen_section = None
+        for section in soup.find_all("section"):
+            h2 = section.find("h2")
+            if h2 and "Veranstaltungen" in h2.get_text():
+                veranstaltungen_section = section
+                break
 
-        for article in articles:
+        if not veranstaltungen_section:
+            print("[Zabriskie] Veranstaltungen-Sektion nicht gefunden")
+            return events
+
+        # Event-Karten sind .article-card-wrapper
+        cards = veranstaltungen_section.select(".article-card-wrapper")
+        seen_titles = set()
+
+        for card in cards:
             try:
                 # Titel
-                title_elem = article.find(["h2", "h3"])
+                title_elem = card.find(["h2", "h3"])
                 title = title_elem.get_text(strip=True) if title_elem else ""
                 if not title or len(title) < 5:
                     continue
 
-                # Datum: "Sat, Mar 14, 2026 at 7:00 PM"
-                text = article.get_text(" ", strip=True)
+                # Deduplizieren
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
+
+                # Datum: "START →Sat, Mar 14, 2026 at 7:00 PM"
+                text = card.get_text(" ", strip=True)
 
                 # Überspringe beendete Events
                 if "Event finished" in text or "finished" in text.lower():
@@ -10403,9 +10422,9 @@ def scrape_zabriskie() -> list[dict]:
                     continue
 
                 # Link
-                link_elem = article.find("a", href=True)
+                link_elem = card.find("a", href=True)
                 href = link_elem.get("href", "") if link_elem else ""
-                event_link = f"https://zabriskie.de{href}" if href.startswith("/") else (href or "https://zabriskie.de/blogs/lesungen-und-prasentationen")
+                event_link = f"https://zabriskie.de{href}" if href.startswith("/") else (href or "https://zabriskie.de")
 
                 event_id = hashlib.md5(
                     f"zabriskie-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
@@ -10460,7 +10479,7 @@ def scrape_buchbox() -> list[dict]:
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Events mit Datum "12.03.2026 | 20:00 Uhr"
-        event_cards = soup.select("article, .event-item, .veranstaltung")
+        event_cards = soup.select(".veranstaltungbuchbox.overview")
 
         for card in event_cards:
             try:
@@ -10756,7 +10775,8 @@ def scrape_ocelot() -> list[dict]:
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Events mit Datum "14.03.2026 19:30 Uhr"
-        event_sections = soup.select("article, .event, .veranstaltung, section")
+        # Einzelne Events sind in .row innerhalb von .retailerEvent
+        event_sections = soup.select(".retailerEvent .col-12.col-md-10")
 
         for section in event_sections:
             try:
@@ -11118,8 +11138,8 @@ def refresh_cache():
     all_events.extend(scrape_ffbiz())
     all_events.extend(scrape_zabriskie())
     all_events.extend(scrape_buchbox())
-    all_events.extend(scrape_geistesblueten())
-    all_events.extend(scrape_nicolaische())
+    # all_events.extend(scrape_geistesblueten())  # Domain existiert nicht mehr
+    # all_events.extend(scrape_nicolaische())  # Braucht JavaScript
     all_events.extend(scrape_ocelot())
     all_events.extend(scrape_motto_berlin())
 
