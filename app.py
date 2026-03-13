@@ -141,7 +141,7 @@ VERANSTALTER = {
     "museum-reinickendorf": {"name": "Museum Reinickendorf", "url": "https://museum-reinickendorf.de"},
     # Kunst & Galerien
     "kw-institute-for-contemporary-art": {"name": "KW Institute for Contemporary Art", "url": "https://www.kw-berlin.de"},
-    "gropius-bau": {"name": "Gropius Bau", "url": "https://www.berlinerfestspiele.de/gropiusbau"},
+    "gropius-bau": {"name": "Gropius Bau", "url": "https://www.berlinerfestspiele.de/de/gropius-bau"},
     "haus-am-waldsee": {"name": "Haus am Waldsee", "url": "https://www.hausamwaldsee.de"},
     "c-o-berlin": {"name": "C/O Berlin", "url": "https://co-berlin.org"},
     "ngbk": {"name": "nGbK", "url": "https://www.ngbk.de"},
@@ -8956,80 +8956,137 @@ def scrape_gropius_bau() -> list[dict]:
         name=venue_name,
         adresse=venue_address,
         bezirk="friedrichshain-kreuzberg",
-        url="https://www.berlinerfestspiele.de/gropiusbau",
+        url="https://www.berlinerfestspiele.de/de/gropius-bau",
     )
 
     # Filter
     BLOCKED_PATTERNS = [
         "führung", "tour",
         "kinder", "familien", "kids", "schüler",
-        "workshop",
+        "workshop", "baubau", "spielen in der stadt",
     ]
 
+    # Deutsche Monate für Datum-Parsing
+    MONTHS_DE = {
+        "januar": 1, "februar": 2, "märz": 3, "april": 4,
+        "mai": 5, "juni": 6, "juli": 7, "august": 8,
+        "september": 9, "oktober": 10, "november": 11, "dezember": 12,
+    }
+
     try:
-        # Programm-Seite mit Filter auf Gropius Bau
+        # Ausstellungen-Seite scrapen (neue URL-Struktur seit 2026)
         resp = requests.get(
-            "https://www.berlinerfestspiele.de/de/gropiusbau/programm/kalender.html",
+            "https://www.berlinerfestspiele.de/de/gropius-bau/ausstellungen/aktuell-und-vorschau",
             headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
             timeout=15,
         )
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # JSON-LD oder Event-Elemente suchen
+        # JSON-LD Daten suchen
         json_ld = soup.find("script", type="application/ld+json")
         if json_ld:
             try:
                 data = json.loads(json_ld.string)
-                if isinstance(data, list):
-                    for item in data:
-                        if item.get("@type") == "Event":
-                            title = item.get("name", "")
-                            if not title:
-                                continue
-                            title_lower = title.lower()
-                            if any(p in title_lower for p in BLOCKED_PATTERNS):
-                                continue
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if item.get("@type") in ("Event", "ExhibitionEvent", "Exhibition"):
+                        title = item.get("name", "")
+                        if not title:
+                            continue
+                        title_lower = title.lower()
+                        if any(p in title_lower for p in BLOCKED_PATTERNS):
+                            continue
 
-                            start_date = item.get("startDate", "")
-                            if start_date:
-                                try:
-                                    event_date = datetime.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
-                                    if event_date.date() >= now.date():
-                                        event_id = hashlib.md5(f"gropius-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()).hexdigest()[:12]
-                                        events.append({
-                                            "id": event_id,
-                                            "title": title,
-                                            "date": event_date,
-                                            "time": event_date.strftime("%H:%M"),
-                                            "venue_slug": venue_slug,
-                                            "venue_name": venue_name,
-                                            "venue_address": venue_address,
-                                            "bezirk": "friedrichshain-kreuzberg",
-                                            "type": "ausstellung",
-                                            "description": item.get("description", "")[:300],
-                                            "link": item.get("url", "https://www.berlinerfestspiele.de/gropiusbau"),
-                                            "source": "gropius-bau",
-                                        })
-                                except ValueError:
-                                    pass
+                        start_date = item.get("startDate", "")
+                        end_date = item.get("endDate", "")
+                        if start_date:
+                            try:
+                                event_date = datetime.fromisoformat(start_date.replace("Z", "+00:00")).replace(tzinfo=None)
+                                if event_date.date() >= now.date():
+                                    event_id = hashlib.md5(f"gropius-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()).hexdigest()[:12]
+                                    desc = item.get("description", "")[:300] if item.get("description") else ""
+                                    events.append({
+                                        "id": event_id,
+                                        "title": title,
+                                        "date": event_date,
+                                        "time": event_date.strftime("%H:%M") if event_date.hour else "10:00",
+                                        "venue_slug": venue_slug,
+                                        "venue_name": venue_name,
+                                        "venue_address": venue_address,
+                                        "bezirk": "friedrichshain-kreuzberg",
+                                        "type": "ausstellung",
+                                        "description": desc,
+                                        "link": item.get("url", "https://www.berlinerfestspiele.de/de/gropius-bau"),
+                                        "source": "gropius-bau",
+                                    })
+                            except ValueError:
+                                pass
             except json.JSONDecodeError:
                 pass
 
-        # Fallback: Event-Elemente parsen
-        event_cards = soup.select(".event-card, .program-item, article.event")
-        for card in event_cards:
+        # Fallback: TextMediaModule-Wrapper parsen (Berliner Festspiele 2026 Layout)
+        wrappers = soup.find_all("div", class_=lambda c: c and "TextMediaModule_wrapper" in c)
+        for wrapper in wrappers:
             try:
-                title_elem = card.find(["h2", "h3", "h4"])
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                if not title:
+                # Titel finden (h2, h3, strong)
+                title_elem = wrapper.find(["h2", "h3", "strong"])
+                if not title_elem:
+                    continue
+                title = title_elem.get_text(strip=True)
+                if not title or len(title) < 3:
                     continue
 
                 title_lower = title.lower()
                 if any(p in title_lower for p in BLOCKED_PATTERNS):
                     continue
 
-                # Weitere Verarbeitung falls nötig
+                # Link finden
+                link_elem = wrapper.find("a", href=True)
+                link = ""
+                if link_elem:
+                    href = link_elem.get("href", "")
+                    if href.startswith("/"):
+                        link = f"https://www.berlinerfestspiele.de/de{href}"
+                    elif href.startswith("http"):
+                        link = href
+
+                # Datum parsen (Format: "19. März bis 28. Juni 2026" oder "14. März 2026")
+                text = wrapper.get_text()
+                # Versuche zuerst Datumsbereich zu finden
+                date_match = re.search(r'(\d{1,2})\.\s*([A-Za-zäöü]+)\s*(?:bis|–|-)\s*\d{1,2}\.\s*[A-Za-zäöü]+\s*(\d{4})', text)
+                if not date_match:
+                    # Einzelnes Datum
+                    date_match = re.search(r'(\d{1,2})\.\s*([A-Za-zäöü]+)\s*(\d{4})', text)
+
+                if date_match:
+                    day = int(date_match.group(1))
+                    month_name = date_match.group(2).lower()
+                    year = int(date_match.group(3))
+                    month = MONTHS_DE.get(month_name)
+                    if month and year >= now.year:
+                        try:
+                            event_date = datetime(year, month, day, 10, 0)
+                            if event_date.date() >= now.date():
+                                event_id = hashlib.md5(f"gropius-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()).hexdigest()[:12]
+                                # Duplikat-Check
+                                if not any(e["id"] == event_id for e in events):
+                                    events.append({
+                                        "id": event_id,
+                                        "title": title,
+                                        "date": event_date,
+                                        "time": "10:00",
+                                        "venue_slug": venue_slug,
+                                        "venue_name": venue_name,
+                                        "venue_address": venue_address,
+                                        "bezirk": "friedrichshain-kreuzberg",
+                                        "type": "ausstellung",
+                                        "description": "",
+                                        "link": link or "https://www.berlinerfestspiele.de/de/gropius-bau",
+                                        "source": "gropius-bau",
+                                    })
+                        except ValueError:
+                            pass
             except Exception:
                 continue
 
@@ -11323,238 +11380,108 @@ def scrape_criticaltheory() -> list[dict]:
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _safe_scrape(scraper_func, name):
+    """Führt einen Scraper sicher aus mit Error-Handling."""
+    try:
+        result = scraper_func()
+        if result:
+            print(f"[Scraper] {name}: {len(result)} Events")
+        return result or []
+    except Exception as e:
+        print(f"[Scraper] {name} FEHLER: {e}")
+        return []
+
+
 def refresh_cache():
     """Aktualisiert den Event-Cache von allen Quellen."""
     global _EVENT_CACHE, _CACHE_LOADING
 
     all_events = []
 
-    # Stressfaktor
-    all_events.extend(scrape_stressfaktor())
-
-    # Rosa Luxemburg Stiftung
-    all_events.extend(scrape_rosalux())
-
-    # HAU Hebbel am Ufer
-    all_events.extend(scrape_hau())
-
-    # Literaturforum im Brecht-Haus
-    all_events.extend(scrape_lfbrecht())
-
-    # Baiz
-    all_events.extend(scrape_baiz())
-
-    # Silent Green
-    all_events.extend(scrape_silentgreen())
-
-    # Cinema Surreal
-    all_events.extend(scrape_cinema_surreal())
-
-    # Acud Macht Neu
-    all_events.extend(scrape_acud())
-
-    # Regenbogenfabrik
-    all_events.extend(scrape_regenbogenfabrik())
-
-    # Lettrétage
-    all_events.extend(scrape_lettretage())
-
-    # Brotfabrik
-    all_events.extend(scrape_brotfabrik())
-
-    # Mehringhof Theater
-    all_events.extend(scrape_mehringhof())
-
-    # SO36
-    all_events.extend(scrape_so36())
-
-    # Urania
-    all_events.extend(scrape_urania())
-
-    # Babylon, Literaturhaus, FES - Scraper vorbereitet aber deaktiviert (komplexe Strukturen)
-    # all_events.extend(scrape_babylon())
-    # all_events.extend(scrape_literaturhaus())
-    # all_events.extend(scrape_fes())
-
-    # Panke
-    all_events.extend(scrape_panke())
-
-    # Kino Central (nur Specials)
-    all_events.extend(scrape_kino_central())
-
-    # Lichtblick Kino (nur Specials/Filmreihen)
-    all_events.extend(scrape_lichtblick())
-
-    # Festsaal Kreuzberg
-    all_events.extend(scrape_festsaal())
-
-    # Schwarze Risse (Buchladen)
-    all_events.extend(scrape_schwarze_risse())
-
-    # Buchladen Weltkugel
-    all_events.extend(scrape_weltkugel())
-
-    # Peter Edel
-    all_events.extend(scrape_peteredel())
-
-    # KuBiZ Wallenberg
-    all_events.extend(scrape_kubiz())
-
-    # Zeiss-Großplanetarium
-    all_events.extend(scrape_planetarium())
-
-    # Publix (Haus des Journalismus)
-    all_events.extend(scrape_publix())
-
-    # KW Institute for Contemporary Art
-    all_events.extend(scrape_kw())
-
-    # Topographie des Terrors
-    all_events.extend(scrape_topographie())
-
-    # Jüdisches Museum Berlin
-    all_events.extend(scrape_jmberlin())
-
-    # nGbK (neue Gesellschaft für bildende Kunst)
-    all_events.extend(scrape_ngbk())
-
-    # Anne Frank Zentrum (Lesungen, Vorträge - keine Führungen/Wanderausstellungen)
-    all_events.extend(scrape_annefrank())
-
-    # Haus am Waldsee
-    all_events.extend(scrape_hausamwaldsee())
-
-    # Dokumentationszentrum Flucht, Vertreibung, Versöhnung
-    all_events.extend(scrape_dokumentationszentrum())
-
-    # Kunstraum Kreuzberg/Bethanien
-    all_events.extend(scrape_kunstraumkreuzberg())
-
-    # ZOiS
-    all_events.extend(scrape_zois())
-
-    # LPB Berlin
-    all_events.extend(scrape_lpb_berlin())
-
-    # BPB (nur Berlin-Events)
-    all_events.extend(scrape_bpb())
-
-    # Futurium (PDF-Layout zu komplex, vorerst deaktiviert)
-    # all_events.extend(scrape_futurium())
-
-    # MMZ Potsdam
-    all_events.extend(scrape_mmz())
-
-    # ZZF Potsdam
-    all_events.extend(scrape_zzf())
-
-    # Renaissance-Theater (nur Specials)
-    all_events.extend(scrape_renaissance_theater())
-
-    # Flutgraben
-    all_events.extend(scrape_flutgraben())
-
-    # Einstein Forum (iCal)
-    all_events.extend(scrape_einstein_forum())
-
-    # Museum für Kommunikation Berlin
-    all_events.extend(scrape_mfk_berlin())
-
-    # C/O Berlin
-    all_events.extend(scrape_co_berlin())
-
-    # Deutsches Technikmuseum
-    all_events.extend(scrape_technikmuseum())
-
-    # Gropius Bau
-    all_events.extend(scrape_gropius_bau())
-
-    # Haus der Wannsee-Konferenz
-    all_events.extend(scrape_wannseekonferenz())
-
-    # Brücke-Museum
-    all_events.extend(scrape_bruecke_museum())
-
-    # Tränenpalast
-    all_events.extend(scrape_traenenpalast())
-
-    # Haus für Poesie
-    all_events.extend(scrape_haus_fuer_poesie())
-
-    # Panda Platforma
-    all_events.extend(scrape_panda_platforma())
-
-    # Alte Kantine Wedding
-    all_events.extend(scrape_alte_kantine())
-
-    # Kesselhaus (ohne Konzert, Theater, Party)
-    all_events.extend(scrape_kesselhaus())
-
-    # Frannz Club (kulturelle Events)
-    all_events.extend(scrape_frannz())
-
-    # RambaZamba Theater (Premieren)
-    all_events.extend(scrape_rambazamba())
-
-    # Buchhandlungen und Archive
-    all_events.extend(scrape_bbooks())
-    all_events.extend(scrape_pro_qm())
-    all_events.extend(scrape_august_bebel())
-    all_events.extend(scrape_ffbiz())
-    all_events.extend(scrape_zabriskie())
-    all_events.extend(scrape_buchbox())
-    # all_events.extend(scrape_geistesblueten())  # Domain existiert nicht mehr
-    # all_events.extend(scrape_nicolaische())  # Braucht JavaScript
-    all_events.extend(scrape_ocelot())
-    all_events.extend(scrape_motto_berlin())
-
-    # Deutsches Spionagemuseum
-    all_events.extend(scrape_spionagemuseum())
-
-    # Museum Reinickendorf
-    all_events.extend(scrape_museum_reinickendorf())
-
-    # Käthe-Kollwitz-Museum Berlin
-    all_events.extend(scrape_kollwitz_museum())
-
-    # Staatliche Museen zu Berlin (SMB) - filtert Führungen, Workshops, Kinderevents
-    all_events.extend(scrape_smb_museen())
-
-    # Museum Charlottenburg-Wilmersdorf (Villa Oppenheim)
-    all_events.extend(scrape_museum_charlottenburg())
-
-    # Humboldt Forum (via REST API)
-    all_events.extend(scrape_humboldt_forum())
-
-    # Mitte Museum
-    all_events.extend(scrape_mitte_museum())
-
-    # Mendelssohn-Remise
-    all_events.extend(scrape_mendelssohn_remise())
-
-    # Deutsches Historisches Museum
-    all_events.extend(scrape_dhm())
-
-    # n.b.k. Neuer Berliner Kunstverein
-    all_events.extend(scrape_nbk())
-
-    # Kreativhaus Berlin
-    all_events.extend(scrape_kreativhaus())
-
-    # Newsletter RSS (Urban Nation)
-    all_events.extend(scrape_newsletter_rss())
-
-    # Museumsportal Berlin (aus manuell gepflegter JSON-Datei)
-    all_events.extend(load_museumsportal_from_json())
-
-    # Schaubühne (Diskurs, Lesung, Premiere)
-    all_events.extend(scrape_schaubuehne())
-
-    # Luftschloss Tempelhofer Feld
-    all_events.extend(scrape_luftschloss())
-
-    # Critical Theory Berlin (KTB)
-    all_events.extend(scrape_criticaltheory())
+    # Liste aller Scraper mit Namen
+    scrapers = [
+        (scrape_stressfaktor, "Stressfaktor"),
+        (scrape_rosalux, "Rosa Luxemburg Stiftung"),
+        (scrape_hau, "HAU"),
+        (scrape_lfbrecht, "Literaturforum Brecht-Haus"),
+        (scrape_baiz, "Baiz"),
+        (scrape_silentgreen, "Silent Green"),
+        (scrape_cinema_surreal, "Cinema Surreal"),
+        (scrape_acud, "Acud Macht Neu"),
+        (scrape_regenbogenfabrik, "Regenbogenfabrik"),
+        (scrape_lettretage, "Lettrétage"),
+        (scrape_brotfabrik, "Brotfabrik"),
+        (scrape_mehringhof, "Mehringhof Theater"),
+        (scrape_so36, "SO36"),
+        (scrape_urania, "Urania"),
+        (scrape_panke, "Panke"),
+        (scrape_kino_central, "Kino Central"),
+        (scrape_lichtblick, "Lichtblick Kino"),
+        (scrape_festsaal, "Festsaal Kreuzberg"),
+        (scrape_schwarze_risse, "Schwarze Risse"),
+        (scrape_weltkugel, "Buchladen Weltkugel"),
+        (scrape_peteredel, "Peter Edel"),
+        (scrape_kubiz, "KuBiZ"),
+        (scrape_planetarium, "Zeiss-Planetarium"),
+        (scrape_publix, "Publix"),
+        (scrape_kw, "KW Institute"),
+        (scrape_topographie, "Topographie des Terrors"),
+        (scrape_jmberlin, "Jüdisches Museum"),
+        (scrape_ngbk, "nGbK"),
+        (scrape_annefrank, "Anne Frank Zentrum"),
+        (scrape_hausamwaldsee, "Haus am Waldsee"),
+        (scrape_dokumentationszentrum, "Dokumentationszentrum"),
+        (scrape_kunstraumkreuzberg, "Kunstraum Kreuzberg"),
+        (scrape_zois, "ZOiS"),
+        (scrape_lpb_berlin, "LPB Berlin"),
+        (scrape_bpb, "BPB"),
+        (scrape_mmz, "MMZ Potsdam"),
+        (scrape_zzf, "ZZF Potsdam"),
+        (scrape_renaissance_theater, "Renaissance-Theater"),
+        (scrape_flutgraben, "Flutgraben"),
+        (scrape_einstein_forum, "Einstein Forum"),
+        (scrape_mfk_berlin, "Museum für Kommunikation"),
+        (scrape_co_berlin, "C/O Berlin"),
+        (scrape_technikmuseum, "Technikmuseum"),
+        (scrape_gropius_bau, "Gropius Bau"),
+        (scrape_wannseekonferenz, "Wannsee-Konferenz"),
+        (scrape_bruecke_museum, "Brücke-Museum"),
+        (scrape_traenenpalast, "Tränenpalast"),
+        (scrape_haus_fuer_poesie, "Haus für Poesie"),
+        (scrape_panda_platforma, "Panda Platforma"),
+        (scrape_alte_kantine, "Alte Kantine"),
+        (scrape_kesselhaus, "Kesselhaus"),
+        (scrape_frannz, "Frannz Club"),
+        (scrape_rambazamba, "RambaZamba"),
+        (scrape_bbooks, "b_books"),
+        (scrape_pro_qm, "pro qm"),
+        (scrape_august_bebel, "August Bebel"),
+        (scrape_ffbiz, "FFBIZ"),
+        (scrape_zabriskie, "Zabriskie"),
+        (scrape_buchbox, "Buchbox"),
+        (scrape_ocelot, "Ocelot"),
+        (scrape_motto_berlin, "Motto Berlin"),
+        (scrape_spionagemuseum, "Spionagemuseum"),
+        (scrape_museum_reinickendorf, "Museum Reinickendorf"),
+        (scrape_kollwitz_museum, "Kollwitz Museum"),
+        (scrape_smb_museen, "SMB Museen"),
+        (scrape_museum_charlottenburg, "Museum Charlottenburg"),
+        (scrape_humboldt_forum, "Humboldt Forum"),
+        (scrape_mitte_museum, "Mitte Museum"),
+        (scrape_mendelssohn_remise, "Mendelssohn-Remise"),
+        (scrape_dhm, "DHM"),
+        (scrape_nbk, "n.b.k."),
+        (scrape_kreativhaus, "Kreativhaus"),
+        (scrape_newsletter_rss, "Newsletter RSS"),
+        (load_museumsportal_from_json, "Museumsportal JSON"),
+        (scrape_schaubuehne, "Schaubühne"),
+        (scrape_luftschloss, "Luftschloss"),
+        (scrape_criticaltheory, "Critical Theory Berlin"),
+    ]
+
+    # Alle Scraper durchlaufen
+    for scraper_func, name in scrapers:
+        all_events.extend(_safe_scrape(scraper_func, name))
 
     # Speicher freigeben
     gc.collect()
