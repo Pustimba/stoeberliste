@@ -31,6 +31,19 @@ app.config["SESSION_PERMANENT"] = False
 Session(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Datetime Helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def make_naive(dt: datetime) -> datetime:
+    """Konvertiert timezone-aware datetime zu naive (entfernt tzinfo)."""
+    if dt is None:
+        return None
+    if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Slugify Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -11570,8 +11583,8 @@ def index():
     """Startseite - alle kommenden Events chronologisch."""
     now = datetime.now()
     events = sorted(
-        [e for e in get_events() if e.get("date") and e["date"] >= now],
-        key=lambda x: x["date"]
+        [e for e in get_events() if e.get("date") and make_naive(e["date"]) >= now],
+        key=lambda x: make_naive(x["date"])
     )
     return render_template(
         "index.html",
@@ -11633,7 +11646,7 @@ def ort(slug: str):
         )
 
     events = get_events_by_veranstalter(slug)
-    events = sorted(events, key=lambda x: x.get("date", datetime.max))
+    events = sorted(events, key=lambda x: make_naive(x.get("date")) or datetime.max)
 
     return render_template(
         "ort.html",
@@ -11653,7 +11666,7 @@ def typ(slug: str):
         return redirect(url_for("index"))
 
     events = get_events_by_type(slug)
-    events = sorted(events, key=lambda x: x.get("date", datetime.max))
+    events = sorted(events, key=lambda x: make_naive(x.get("date")) or datetime.max)
 
     return render_template(
         "typ.html",
@@ -11673,7 +11686,7 @@ def bezirk(slug: str):
         return redirect(url_for("index"))
 
     events = get_events_by_bezirk(slug)
-    events = sorted(events, key=lambda x: x.get("date", datetime.max))
+    events = sorted(events, key=lambda x: make_naive(x.get("date")) or datetime.max)
 
     return render_template(
         "bezirk.html",
@@ -11743,7 +11756,7 @@ def suche():
             if _event_in_time_range(e, start_hour, end_hour)
         ]
 
-    events = sorted(events, key=lambda x: x.get("date", datetime.max))
+    events = sorted(events, key=lambda x: make_naive(x.get("date")) or datetime.max)
 
     return render_template(
         "suche.html",
@@ -11764,7 +11777,7 @@ def merkliste():
     """Gespeicherte Events."""
     saved_ids = session.get("saved_events", [])
     events = [e for e in get_events() if e.get("id") in saved_ids]
-    events = sorted(events, key=lambda x: x.get("date", datetime.max))
+    events = sorted(events, key=lambda x: make_naive(x.get("date")) or datetime.max)
 
     return render_template(
         "merkliste.html",
