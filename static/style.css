@@ -202,7 +202,7 @@ nav ul.navbar li a:hover,
   top: 100%;
   left: 0;
   margin-top: 8px;
-  background-color: var(--bg-card);
+  background-color: var(--bg-accent);
   min-width: 280px;
   max-height: 70vh;
   overflow-y: auto;
@@ -225,11 +225,11 @@ nav ul.navbar li a:hover,
 .dropdown-content li a {
   display: block;
   padding: 0.75rem 1rem;
-  color: var(--text-primary);
+  color: #ffffff;
   font-family: 'DM Sans', sans-serif;
   font-size: 0.9rem;
   font-weight: 500;
-  border-bottom: 1px solid var(--border-light);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   transition: all 0.15s;
 }
 
@@ -568,7 +568,6 @@ h1::after {
   height: 6px;
   background: linear-gradient(90deg, var(--color-red), var(--color-orange), var(--color-yellow));
   margin-top: var(--spacing-sm);
-  border-radius: 3px;
 }
 
 h2 {
@@ -604,7 +603,6 @@ h2 {
   position: sticky;
   top: var(--nav-height);
   z-index: 10;
-  border-radius: 4px;
 }
 
 .date-separator:first-child {
@@ -636,7 +634,6 @@ h2 {
   flex-direction: column;
   border: 2px solid var(--border);
   background: var(--bg-card);
-  border-radius: 8px;
   overflow: hidden;
   transition: all 0.25s ease;
   position: relative;
@@ -661,8 +658,7 @@ h2 {
 }
 
 .event-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 6px 6px 0 var(--card-accent);
+  box-shadow: 4px 4px 0 var(--card-accent);
   border-color: var(--card-accent);
 }
 
@@ -674,9 +670,7 @@ h2 {
   color: #ffffff;
 }
 
-.event-card:hover .venue-logo {
-  filter: brightness(0) invert(1);
-}
+/* Logo bleibt unverändert beim Hover - nur Text wird weiß */
 
 /* Venue Panel */
 .venue-panel {
@@ -743,7 +737,6 @@ h2 {
   color: var(--text-primary);
   background: var(--color-yellow);
   padding: 0.15em 0.5em;
-  border-radius: 3px;
 }
 
 .event-venue-address {
@@ -757,7 +750,6 @@ h2 {
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  border-radius: 3px;
 }
 
 .event-free-badge {
@@ -768,7 +760,6 @@ h2 {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  border-radius: 3px;
 }
 
 .event-details h2 {
@@ -805,7 +796,6 @@ h2 {
   right: var(--spacing-md);
   background: var(--bg-card);
   border: 2px solid var(--border);
-  border-radius: 50%;
   cursor: pointer;
   padding: 8px;
   display: flex;
@@ -849,7 +839,6 @@ h2 {
   display: flex;
   margin-bottom: var(--spacing-lg);
   border: 2px solid var(--border);
-  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -911,7 +900,6 @@ h2 {
   margin-bottom: var(--spacing-sm);
   text-transform: uppercase;
   font-family: 'Space Grotesk', sans-serif;
-  border-radius: 4px;
 }
 
 /* Compact cards */
