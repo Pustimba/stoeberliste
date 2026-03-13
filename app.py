@@ -251,9 +251,14 @@ def inject_venue_logos():
     venue_logos = {}
     if os.path.exists(logos_dir):
         for filename in os.listdir(logos_dir):
-            if filename.endswith(".svg"):
-                slug = filename[:-4]  # Remove .svg
-                venue_logos[slug] = filename
+            # Support svg, png, jpg, jpeg
+            for ext in (".svg", ".png", ".jpg", ".jpeg"):
+                if filename.endswith(ext):
+                    slug = filename[:-len(ext)]
+                    # Don't overwrite if svg already exists (prefer svg)
+                    if slug not in venue_logos or filename.endswith(".svg"):
+                        venue_logos[slug] = filename
+                    break
     return {"venue_logos": venue_logos}
 
 
