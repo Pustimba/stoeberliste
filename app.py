@@ -11843,9 +11843,17 @@ def _event_in_time_range(event: dict, start_hour: int, end_hour: int) -> bool:
 # Startup
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Cache beim Start laden
-print("[Startup] Lade Events...")
-refresh_cache()
+# Cache im Hintergrund laden, damit der Server sofort starten kann
+import threading
+
+def _background_refresh():
+    print("[Startup] Lade Events im Hintergrund...")
+    refresh_cache()
+    print("[Startup] Events geladen!")
+
+# Starte das Scraping in einem separaten Thread
+_cache_thread = threading.Thread(target=_background_refresh, daemon=True)
+_cache_thread.start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
