@@ -357,6 +357,12 @@ TIME_SLOTS = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 _EVENT_CACHE: list[dict] = []
+_CACHE_LOADING: bool = True  # Flag ob der Cache noch lädt
+
+
+def is_cache_loading() -> bool:
+    """Gibt True zurück wenn der Cache noch lädt."""
+    return _CACHE_LOADING
 
 
 def get_events() -> list[dict]:
@@ -11319,7 +11325,7 @@ def scrape_criticaltheory() -> list[dict]:
 
 def refresh_cache():
     """Aktualisiert den Event-Cache von allen Quellen."""
-    global _EVENT_CACHE
+    global _EVENT_CACHE, _CACHE_LOADING
 
     all_events = []
 
@@ -11570,7 +11576,9 @@ def refresh_cache():
             seen_ids.add(event["id"])
             unique_events.append(event)
 
+    global _CACHE_LOADING
     _EVENT_CACHE = unique_events
+    _CACHE_LOADING = False
     print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
 
 
@@ -11592,6 +11600,7 @@ def index():
         venues=get_veranstalter(),
         bezirke=get_bezirke_sorted(),
         event_types=get_event_types_sorted(),
+        cache_loading=is_cache_loading(),
     )
 
 

@@ -9,6 +9,8 @@
 <div class="event-list">
     {% if events %}
         {{ event_list_with_dates(events, event_types, venue_logos=venue_logos) }}
+    {% elif cache_loading %}
+        <p class="no-events loading-message">Veranstaltungen werden geladen... Bitte in einer Minute neu laden.</p>
     {% else %}
         <p class="no-events">Keine Veranstaltungen gefunden.</p>
     {% endif %}
