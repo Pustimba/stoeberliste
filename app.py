@@ -11540,8 +11540,14 @@ def refresh_cache():
     # Speicher freigeben
     gc.collect()
 
-    # Sortieren nach Datum
-    all_events.sort(key=lambda x: x.get("date", datetime.max))
+    # Sortieren nach Datum (timezone-aware -> naive für Vergleich)
+    def _sort_key(event):
+        dt = event.get("date", datetime.max)
+        # Falls timezone-aware, zu naive konvertieren (lokale Zeit)
+        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    all_events.sort(key=_sort_key)
 
     # Duplikate entfernen (nach ID)
     seen_ids = set()
