@@ -84,6 +84,7 @@ VERANSTALTER = {
     # Museumsportal nicht als eigener Veranstalter - Events erscheinen beim jeweiligen Museum
     "schaubuehne-berlin": {"name": "Schaubühne Berlin", "url": "https://www.schaubuehne.de"},
     "luftschloss-tempelhofer-feld": {"name": "Luftschloss Tempelhofer Feld", "url": "https://luftschloss-tempelhoferfeld.de"},
+    "critical-theory-berlin": {"name": "Critical Theory Berlin", "url": "https://criticaltheoryinberlin.de"},
 }
 
 
@@ -1839,6 +1840,25 @@ def scrape_regenbogenfabrik() -> list[dict]:
             event_id = hashlib.md5(f"regenbogenfabrik-{href}".encode()).hexdigest()[:12]
             event_type = _classify_event_type(title, text)
 
+            # Fetch description from detail page
+            description = ""
+            try:
+                detail_resp = requests.get(
+                    href,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                    timeout=10,
+                )
+                if detail_resp.status_code == 200:
+                    detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                    # Description is in p tags within the content
+                    for p in detail_soup.select("article p, .entry-content p, .content p"):
+                        p_text = p.get_text(strip=True)
+                        if len(p_text) > 30:
+                            description = p_text[:300]
+                            break
+            except Exception:
+                pass
+
             events.append({
                 "id": event_id,
                 "title": title,
@@ -1849,7 +1869,7 @@ def scrape_regenbogenfabrik() -> list[dict]:
                 "venue_address": venue_address,
                 "bezirk": "kreuzberg",
                 "type": event_type,
-                "description": "",
+                "description": description,
                 "link": href,
                 "source": "regenbogenfabrik",
             })
@@ -7088,6 +7108,19 @@ def scrape_museum_charlottenburg() -> list[dict]:
                 else:
                     event_type = "diskussion"
 
+                # Beschreibung aus .vrst-content p (nach der Headline)
+                description = ""
+                vrst_content = container.select_one(".vrst-content")
+                if vrst_content:
+                    # Nimm alle p-Elemente nach der Headline
+                    paragraphs = vrst_content.select("p")
+                    for p in paragraphs:
+                        p_text = p.get_text(strip=True)
+                        # Überspringe kurze/leere oder reine strong-Tags
+                        if len(p_text) > 30:
+                            description = p_text[:300]
+                            break
+
                 event_id = hashlib.md5(
                     f"charlottenburg-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -7102,7 +7135,7 @@ def scrape_museum_charlottenburg() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "charlottenburg-wilmersdorf",
                     "type": event_type,
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "museum_charlottenburg",
                 })
@@ -7480,6 +7513,14 @@ def scrape_mendelssohn_remise() -> list[dict]:
                 else:
                     event_type = "konzert"  # Default für Mendelssohn-Remise
 
+                # Beschreibung aus .shorttext p
+                description = ""
+                shorttext = event_div.select_one(".shorttext")
+                if shorttext:
+                    desc_p = shorttext.select_one("p")
+                    if desc_p:
+                        description = desc_p.get_text(strip=True)[:300]
+
                 event_id = hashlib.md5(
                     f"mendelssohn-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -7494,7 +7535,7 @@ def scrape_mendelssohn_remise() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "mitte",
                     "type": event_type,
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "mendelssohn_remise",
                 })
@@ -7859,10 +7900,14 @@ def scrape_kreativhaus() -> list[dict]:
                 else:
                     event_type = "diskussion"
 
-                # Beschreibung (bereinigt)
+                # Beschreibung (bereinigt) - excerpt bevorzugen, sonst description
                 excerpt = item.get("excerpt", "")
+                if not excerpt:
+                    excerpt = item.get("description", "")
                 if excerpt:
-                    excerpt = re.sub(r"<[^>]+>", "", excerpt)  # HTML entfernen
+                    # HTML entfernen
+                    excerpt = re.sub(r"<[^>]+>", " ", excerpt)
+                    excerpt = re.sub(r"\s+", " ", excerpt).strip()
                     excerpt = excerpt[:300]
 
                 event_id = hashlib.md5(
@@ -8653,6 +8698,23 @@ def scrape_co_berlin() -> list[dict]:
 
                 event_link = f"https://co-berlin.org{href}" if href.startswith("/") else href
 
+                # Fetch description from detail page
+                description = ""
+                try:
+                    detail_resp = requests.get(
+                        event_link,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                        timeout=10,
+                    )
+                    if detail_resp.status_code == 200:
+                        detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                        # Subtitle field contains the best description
+                        subtitle = detail_soup.select_one(".field--name-field-subtitle")
+                        if subtitle:
+                            description = subtitle.get_text(strip=True)[:300]
+                except Exception:
+                    pass
+
                 event_id = hashlib.md5(
                     f"co-berlin-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -8667,7 +8729,7 @@ def scrape_co_berlin() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "charlottenburg-wilmersdorf",
                     "type": event_type,
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "co-berlin",
                 })
@@ -9029,15 +9091,22 @@ def scrape_bruecke_museum() -> list[dict]:
 
         for link in event_links:
             try:
+                href = link.get("href", "")
+                # Skip iCal and Google Calendar links
+                if href.endswith(".ics") or href.endswith(".google"):
+                    continue
+
                 title = link.get_text(strip=True)
                 if not title or len(title) < 5:
                     continue
 
+                # Skip calendar link texts
                 title_lower = title.lower()
-                if any(p in title_lower for p in BLOCKED_PATTERNS):
+                if title_lower in ("ical", "google calendar", "google\ncalendar"):
                     continue
 
-                href = link.get("href", "")
+                if any(p in title_lower for p in BLOCKED_PATTERNS):
+                    continue
                 event_link = f"https://www.bruecke-museum.de{href}" if href.startswith("/") else href
 
                 # Datum im umgebenden Text suchen
@@ -9070,6 +9139,24 @@ def scrape_bruecke_museum() -> list[dict]:
                 if event_date.date() < now.date():
                     continue
 
+                # Fetch description from detail page
+                description = ""
+                try:
+                    detail_resp = requests.get(
+                        event_link,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+                        timeout=10,
+                    )
+                    if detail_resp.status_code == 200:
+                        detail_soup = BeautifulSoup(detail_resp.text, "html.parser")
+                        for p in detail_soup.select("main p, article p, .content p"):
+                            p_text = p.get_text(strip=True)
+                            if len(p_text) > 50:
+                                description = p_text[:300]
+                                break
+                except Exception:
+                    pass
+
                 event_id = hashlib.md5(
                     f"bruecke-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -9084,7 +9171,7 @@ def scrape_bruecke_museum() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "steglitz-zehlendorf",
                     "type": "vortrag",
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "bruecke-museum",
                 })
@@ -10022,7 +10109,11 @@ def scrape_bbooks() -> list[dict]:
 
 
 def scrape_pro_qm() -> list[dict]:
-    """Scraped Events von pro qm."""
+    """Scraped Events von pro qm.
+
+    Website nutzt .event__listitem mit h2.event__title und .event__subtitle.
+    Datum kommt aus <time datetime="..."> im .event__date.
+    """
     events = []
     now = datetime.now()
 
@@ -10044,49 +10135,47 @@ def scrape_pro_qm() -> list[dict]:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Events in li-Elementen mit Datum "DD.MM.YYYY, HH:MM"
-        event_items = soup.select("li")
+        # Events in .event__listitem Elementen
+        event_items = soup.select(".event__listitem")
 
         for item in event_items:
             try:
-                # Datum im Text
-                text = item.get_text(" ", strip=True)
-                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4}),?\s*(\d{1,2}):(\d{2})", text)
-                if not date_match:
+                # Überspringe vergangene Events
+                if "date-ago" in item.get("class", []):
                     continue
 
-                day = int(date_match.group(1))
-                month = int(date_match.group(2))
-                year = int(date_match.group(3))
-                hour = int(date_match.group(4))
-                minute = int(date_match.group(5))
+                # Datum aus time-Element
+                time_elem = item.select_one(".event__date time")
+                if not time_elem:
+                    continue
+
+                dt_attr = time_elem.get("datetime", "")
+                if not dt_attr:
+                    continue
 
                 try:
-                    event_date = datetime(year, month, day, hour, minute)
-                except ValueError:
+                    event_date = dateparser.parse(dt_attr)
+                    if not event_date:
+                        continue
+                except Exception:
                     continue
 
                 if event_date.date() < now.date():
                     continue
 
-                # Titel aus h3
-                title_elem = item.find("h3")
+                # Titel aus h2.event__title a
+                title_elem = item.select_one(".event__title a")
                 title = title_elem.get_text(strip=True) if title_elem else ""
-                if not title:
-                    # Fallback: erster Link
-                    link_elem = item.find("a")
-                    title = link_elem.get_text(strip=True) if link_elem else ""
 
                 if not title or len(title) < 5:
                     continue
 
                 # Link
-                link_elem = item.find("a", href=True)
-                href = link_elem.get("href", "") if link_elem else ""
+                href = title_elem.get("href", "") if title_elem else ""
                 event_link = f"https://pro-qm.de{href}" if href.startswith("/") else (href or "https://pro-qm.de/events")
 
-                # Beschreibung
-                desc_elem = item.find("p")
+                # Beschreibung aus .event__subtitle
+                desc_elem = item.select_one(".event__subtitle")
                 description = desc_elem.get_text(strip=True)[:300] if desc_elem else ""
 
                 event_id = hashlib.md5(
@@ -10097,7 +10186,7 @@ def scrape_pro_qm() -> list[dict]:
                     "id": event_id,
                     "title": title,
                     "date": event_date,
-                    "time": f"{hour:02d}:{minute:02d}",
+                    "time": event_date.strftime("%H:%M"),
                     "venue_slug": venue_slug,
                     "venue_name": venue_name,
                     "venue_address": venue_address,
@@ -10426,6 +10515,12 @@ def scrape_zabriskie() -> list[dict]:
                 href = link_elem.get("href", "") if link_elem else ""
                 event_link = f"https://zabriskie.de{href}" if href.startswith("/") else (href or "https://zabriskie.de")
 
+                # Beschreibung aus .article-card__excerpt
+                description = ""
+                excerpt_elem = card.select_one(".article-card__excerpt")
+                if excerpt_elem:
+                    description = excerpt_elem.get_text(strip=True)[:300]
+
                 event_id = hashlib.md5(
                     f"zabriskie-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -10440,7 +10535,7 @@ def scrape_zabriskie() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "friedrichshain-kreuzberg",
                     "type": "lesung",
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "zabriskie",
                 })
@@ -10520,6 +10615,12 @@ def scrape_buchbox() -> list[dict]:
                 href = link_elem.get("href", "") if link_elem else ""
                 event_link = f"https://www.buchboxberlin.de{href}" if href.startswith("/") else (href or "https://www.buchboxberlin.de/veranstaltungen")
 
+                # Beschreibung aus .text.js-ellipsis
+                description = ""
+                desc_elem = card.select_one(".text.js-ellipsis")
+                if desc_elem:
+                    description = desc_elem.get_text(strip=True)[:300]
+
                 event_id = hashlib.md5(
                     f"buchbox-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
                 ).hexdigest()[:12]
@@ -10534,7 +10635,7 @@ def scrape_buchbox() -> list[dict]:
                     "venue_address": venue_address,
                     "bezirk": "pankow",
                     "type": "lesung",
-                    "description": "",
+                    "description": description,
                     "link": event_link,
                     "source": "buchbox",
                 })
@@ -10954,6 +11055,173 @@ def scrape_motto_berlin() -> list[dict]:
     return events
 
 
+def scrape_criticaltheory() -> list[dict]:
+    """Scraped Events von Critical Theory Berlin (KTB)."""
+    events = []
+    now = datetime.now()
+
+    # Month name mapping for English and German date format
+    months = {
+        "january": 1, "february": 2, "march": 3, "april": 4,
+        "may": 5, "june": 6, "july": 7, "august": 8,
+        "september": 9, "october": 10, "november": 11, "december": 12,
+        "januar": 1, "februar": 2, "märz": 3, "april": 4, "mai": 5,
+        "juni": 6, "juli": 7, "august": 8, "september": 9,
+        "oktober": 10, "november": 11, "dezember": 12,
+    }
+
+    try:
+        resp = requests.get(
+            "https://criticaltheoryinberlin.de/events/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Each event is in a .box_events_expanded_wrapper
+        event_boxes = soup.select(".box_events_expanded_wrapper")
+
+        for box in event_boxes:
+            try:
+                # Title from h2 > a
+                title_link = box.select_one("h2 a.event_snippet_heading_a")
+                if not title_link:
+                    continue
+                title = title_link.get_text(strip=True)
+                if not title:
+                    continue
+                event_link = title_link.get("href", "")
+
+                # Details from ul.event_datails_in_box li
+                details = box.select("ul.event_datails_in_box li span")
+
+                date_text = ""
+                time_text = ""
+                location = ""
+
+                for detail in details:
+                    text = detail.get_text(strip=True)
+                    if not text:
+                        continue
+
+                    # Check for date pattern: "April 17, 2026" or "4.-5. Juni 2026" or "März 10, 2026"
+                    # English format: Month DD, YYYY
+                    date_match_en = re.search(r"(\w+)\s+(\d{1,2}),?\s+(\d{4})", text)
+                    # German format: DD.-DD. Month YYYY or DD. Month YYYY
+                    date_match_de = re.search(r"(\d{1,2})(?:\.-\d{1,2})?\.?\s+(\w+)\s+(\d{4})", text)
+                    if date_match_en or date_match_de:
+                        date_text = text
+                        continue
+
+                    # Check for time pattern: "18:00 » 20:00" or just "18:00"
+                    time_match = re.search(r"(\d{1,2}):(\d{2})", text)
+                    if time_match and ("»" in text or re.match(r"^\d{1,2}:\d{2}", text)):
+                        time_text = text
+                        continue
+
+                    # Otherwise it's likely the location
+                    if not location and len(text) > 3:
+                        location = text
+
+                # Parse date
+                event_date = None
+                if date_text:
+                    # Try English format first: "April 17, 2026" or "März 10, 2026"
+                    date_match_en = re.search(r"(\w+)\s+(\d{1,2}),?\s+(\d{4})", date_text)
+                    # German format: "4.-5. Juni 2026" or "10. März 2026"
+                    date_match_de = re.search(r"(\d{1,2})(?:\.-\d{1,2})?\.?\s+(\w+)\s+(\d{4})", date_text)
+
+                    if date_match_en:
+                        month_name = date_match_en.group(1).lower()
+                        day = int(date_match_en.group(2))
+                        year = int(date_match_en.group(3))
+                    elif date_match_de:
+                        day = int(date_match_de.group(1))
+                        month_name = date_match_de.group(2).lower()
+                        year = int(date_match_de.group(3))
+                    else:
+                        continue
+
+                    month = months.get(month_name)
+                    if month:
+                        # Parse time
+                        hour, minute = 19, 0  # Default
+                        if time_text:
+                            time_match = re.search(r"(\d{1,2}):(\d{2})", time_text)
+                            if time_match:
+                                hour = int(time_match.group(1))
+                                minute = int(time_match.group(2))
+                        try:
+                            event_date = datetime(year, month, day, hour, minute)
+                        except ValueError:
+                            continue
+
+                if not event_date or event_date.date() < now.date():
+                    continue
+
+                # Create venue
+                venue_name = "Critical Theory Berlin"
+                venue_address = ""
+                bezirk = "mitte"
+
+                # If location mentions HU or Humboldt, use specific address
+                if location and ("humboldt" in location.lower() or "hu berlin" in location.lower()):
+                    venue_address = "Unter den Linden 6, 10117 Berlin"
+                elif location and "fu berlin" in location.lower():
+                    venue_address = "Habelschwerdter Allee 45, 14195 Berlin"
+                    bezirk = "steglitz-zehlendorf"
+                elif location and "grimm" in location.lower():
+                    venue_address = "Geschwister-Scholl-Straße 1, 10117 Berlin"
+
+                venue_slug = get_or_create_venue(
+                    name=venue_name,
+                    adresse=venue_address,
+                    bezirk=bezirk,
+                    url="https://criticaltheoryinberlin.de",
+                )
+
+                event_id = hashlib.md5(
+                    f"ktb-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
+                ).hexdigest()[:12]
+
+                # Determine event type based on title/content
+                event_type = "diskussion"
+                title_lower = title.lower()
+                if "buchpräsentation" in title_lower or "lesung" in title_lower:
+                    event_type = "lesung"
+                elif "film" in title_lower:
+                    event_type = "film"
+                elif "workshop" in title_lower:
+                    event_type = "workshop"
+                elif "summer school" in title_lower:
+                    event_type = "workshop"
+
+                events.append({
+                    "id": event_id,
+                    "title": title,
+                    "date": event_date,
+                    "time": event_date.strftime("%H:%M"),
+                    "venue_slug": venue_slug,
+                    "venue_name": venue_name,
+                    "venue_address": venue_address,
+                    "bezirk": bezirk,
+                    "type": event_type,
+                    "description": location if location else "",
+                    "link": event_link,
+                    "source": "critical-theory-berlin",
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"[Critical Theory Berlin] Fehler: {e}")
+
+    print(f"[Critical Theory Berlin] {len(events)} Events geladen")
+    return events
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Cache Refresh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -11187,6 +11455,9 @@ def refresh_cache():
 
     # Luftschloss Tempelhofer Feld
     all_events.extend(scrape_luftschloss())
+
+    # Critical Theory Berlin (KTB)
+    all_events.extend(scrape_criticaltheory())
 
     # Speicher freigeben
     gc.collect()
