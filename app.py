@@ -923,17 +923,27 @@ def _fetch_hau_details(url: str) -> dict:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Description is in .realContent, first strong tag or first paragraph
+        # Description is in .realContent
+        # Try strong first, but only if it's a real description (not just a name)
         real_content = soup.select_one(".realContent")
         if real_content:
             strong_elem = real_content.select_one("strong")
+            description = ""
+
             if strong_elem:
-                result["description"] = strong_elem.get_text(strip=True)
-            else:
-                # Fallback to first paragraph
+                strong_text = strong_elem.get_text(strip=True)
+                # Only use strong if it's long enough to be a description
+                # (short texts are often just artist names)
+                if len(strong_text) > 30 and " " in strong_text:
+                    description = strong_text
+
+            # Fallback to first paragraph if strong wasn't useful
+            if not description:
                 p_elem = real_content.select_one("p")
                 if p_elem:
-                    result["description"] = p_elem.get_text(strip=True)
+                    description = p_elem.get_text(strip=True)
+
+            result["description"] = description[:300] if description else ""
 
         # Check for free event
         page_text = soup.get_text(" ", strip=True)
