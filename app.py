@@ -11,7 +11,7 @@ import hashlib
 import traceback
 import unicodedata
 from html import unescape
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_session import Session
 import requests
@@ -36,12 +36,13 @@ Session(app)
 # Datetime Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_naive(dt: datetime) -> datetime:
-    """Konvertiert timezone-aware datetime zu naive (entfernt tzinfo)."""
+def make_naive(dt: datetime | None) -> datetime | None:
+    """Konvertiert timezone-aware datetime zu naive lokaler Zeit."""
     if dt is None:
         return None
     if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
-        return dt.replace(tzinfo=None)
+        # Zuerst in lokale Zeit umrechnen, dann tzinfo entfernen
+        return dt.astimezone().replace(tzinfo=None)
     return dt
 
 
@@ -372,9 +373,19 @@ def get_events() -> list[dict]:
     return _EVENT_CACHE
 
 
-def get_events_by_date(date: datetime) -> list[dict]:
+def get_events_by_date(date: datetime | date) -> list[dict]:
     """Filtert Events nach Datum."""
-    return [e for e in _EVENT_CACHE if e.get("date") and e["date"].date() == date.date()]
+    if isinstance(date, datetime):
+        target_date = date.date()
+    elif isinstance(date, date):
+        target_date = date
+    else:
+        # Fallback: versuche, das Eingabedatum in ein datetime-Objekt zu parsen
+        parsed = dateparser.parse(str(date))
+        if not parsed:
+            raise ValueError(f"Ungültiger Datumstyp für get_events_by_date: {date!r}")
+        target_date = parsed.date()
+    return [e for e in _EVENT_CACHE if e.get("date") and make_naive(e["date"]).date() == target_date]
 
 
 def get_events_by_venue(venue_slug: str) -> list[dict]:
@@ -11492,10 +11503,7 @@ def refresh_cache():
         # Sortieren nach Datum (timezone-aware -> naive für Vergleich)
         def _sort_key(event):
             dt = event.get("date") or datetime.max
-            # Falls timezone-aware, zu naive konvertieren (lokale Zeit)
-            if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
-            return dt
+            return make_naive(dt) if dt is not datetime.max else dt
         all_events.sort(key=_sort_key)
 
         # Duplikate entfernen (nach ID)
@@ -11529,10 +11537,15 @@ def refresh_cache():
 def index():
     """Startseite - alle kommenden Events chronologisch."""
     now = datetime.now()
+    all_cached = get_events()
     events = sorted(
-        [e for e in get_events() if e.get("date") and make_naive(e["date"]) >= now],
+        [e for e in all_cached if e.get("date") and make_naive(e["date"]) >= now],
         key=lambda x: make_naive(x["date"])
     )
+    if not events and all_cached:
+        print(f"[index] Warnung: {len(all_cached)} Events im Cache, aber 0 nach Datumsfilter (now={now}, loading={is_cache_loading()})")
+        sample = all_cached[0]
+        print(f"[index] Erstes Event: date={sample.get('date')}, make_naive={make_naive(sample.get('date'))}")
     return render_template(
         "index.html",
         events=events,
