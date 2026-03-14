@@ -11504,7 +11504,7 @@ def refresh_cache():
             seen_ids.add(event["id"])
             unique_events.append(event)
 
-    global _CACHE_LOADING
+    global _EVENT_CACHE, _CACHE_LOADING
     _EVENT_CACHE = unique_events
     _CACHE_LOADING = False
     print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
