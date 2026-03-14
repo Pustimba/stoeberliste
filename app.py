@@ -6,6 +6,7 @@ für linke Subkultur und Politik
 import os
 import re
 import gc
+import json
 import hashlib
 import unicodedata
 from html import unescape
@@ -9594,30 +9595,18 @@ def scrape_panda_platforma() -> list[dict]:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Events: Datum DD/MM/YY, Zeit HH:MM, Titel als Link
-        event_links = soup.select("a[href*='/events/']")
-
-        for link in event_links:
+        # Events sind in Tabellenzeilen: <tr> mit <td class="event-date-time"> und <td class="event-details">
+        rows = soup.find_all("tr")
+        for row in rows:
             try:
-                title = link.get_text(strip=True)
-                if not title or len(title) < 3:
+                date_td = row.find("td", class_="event-date-time")
+                details_td = row.find("td", class_="event-details")
+                if not date_td or not details_td:
                     continue
 
-                href = link.get("href", "")
-                event_link = href if href.startswith("http") else f"https://panda-platforma.berlin{href}"
-
-                # Datum/Zeit im Text davor
-                prev = link.find_previous(string=True)
-                if not prev:
-                    continue
-
-                # Suche nach DD/MM/YY und HH:MM
-                parent_text = ""
-                parent = link.find_parent()
-                if parent:
-                    parent_text = parent.get_text(" ", strip=True)
-
-                date_match = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})\s+(\d{1,2}):(\d{2})", parent_text)
+                # Datum und Zeit aus date_td
+                date_text = date_td.get_text(" ", strip=True)
+                date_match = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})\s+(\d{1,2}):(\d{2})", date_text)
                 if not date_match:
                     continue
 
@@ -9634,6 +9623,18 @@ def scrape_panda_platforma() -> list[dict]:
 
                 if event_date.date() < now.date():
                     continue
+
+                # Titel und Link aus details_td
+                link = details_td.find("a", href=True)
+                if not link:
+                    continue
+
+                title = link.get_text(strip=True)
+                if not title or len(title) < 3:
+                    continue
+
+                href = link.get("href", "")
+                event_link = href if href.startswith("http") else f"https://panda-platforma.berlin{href}"
 
                 event_id = hashlib.md5(
                     f"panda-{title[:50]}-{event_date.strftime('%Y-%m-%d')}".encode()
