@@ -429,16 +429,25 @@ def get_venue_logo(veranstalter_slug: str) -> str | None:
     return None
 
 
+# Logos die trotz Farbe beim Hover invertiert werden sollen
+_FORCE_INVERT_LOGOS = {
+    "brotfabrik",
+    "lichtblick-kino",
+}
+
+
 def _is_monochrome_svg(filepath: str) -> bool:
-    """Prüft ob ein SVG-Logo einfarbig ist (nur eine dominante Farbe)."""
+    """Prüft ob ein SVG-Logo rein schwarz/weiß/grau ist (keine Farben).
+
+    Nur solche Logos werden beim Hover invertiert.
+    Logos mit Akzentfarben (auch nur einer) werden NICHT invertiert.
+    """
     try:
         with open(filepath, encoding="utf-8", errors="replace") as f:
             content = f.read()
     except OSError:
         return False
     hex_re = re.compile(r"#([0-9a-fA-F]{3,6})\b")
-    unique_hues: set[int] = set()
-    has_saturated = False
     for raw in hex_re.findall(content):
         c = raw.lower()
         if len(c) == 3:
@@ -446,25 +455,13 @@ def _is_monochrome_svg(filepath: str) -> bool:
         if len(c) != 6:
             continue
         r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-        # Skip near-black and near-white
-        if r < 30 and g < 30 and b < 30:
-            continue
-        if r > 225 and g > 225 and b > 225:
-            continue
         # Use colorsys for reliable RGB→HLS conversion
         h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
-        if s < 0.05:
-            # Desaturated / grey – doesn't count as a distinct hue
-            continue
-        has_saturated = True
-        # h is in [0, 1]; round to nearest 30° bucket (12 buckets total)
-        hue_deg = h * 360.0
-        unique_hues.add(round(hue_deg / 30) % 12)
-    if not has_saturated:
-        # Only black / white / grey → monochrome
-        return True
-    # Monochrome if all saturated colors share the same hue bucket
-    return len(unique_hues) <= 1
+        # Wenn irgendeine Farbe gesättigt ist (nicht grau), ist es NICHT monochrom
+        if s > 0.15:
+            return False
+    # Nur schwarz/weiß/grau gefunden → monochrom
+    return True
 
 
 @app.context_processor
@@ -480,8 +477,11 @@ def inject_venue_logos():
                     slug = filename[: -len(ext)]
                     if slug not in venue_logos or filename.endswith(".svg"):
                         venue_logos[slug] = filename
-                    if ext == ".svg" and _is_monochrome_svg(
-                        os.path.join(logos_dir, filename)
+                    # Whitelist oder automatische Erkennung
+                    if slug in _FORCE_INVERT_LOGOS or (
+                        ext == ".svg" and _is_monochrome_svg(
+                            os.path.join(logos_dir, filename)
+                        )
                     ):
                         mono_logos.add(slug)
                     break

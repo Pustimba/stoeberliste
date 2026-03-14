@@ -672,12 +672,9 @@ h2 {
   color: #ffffff;
 }
 
-.venue-logo.mono {
-  filter: invert(1);
-}
-
+/* Monochrome Logos: normal schwarz, beim Hover invertiert (weiß auf Farbe) */
 .event-card:hover .venue-logo.mono {
-  filter: invert(0);
+  filter: invert(1);
 }
 
 /* Venue Panel */
