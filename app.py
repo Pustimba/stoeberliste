@@ -167,6 +167,9 @@ VERANSTALTER = {
     "ffbiz": {"name": "FFBIZ", "url": "https://www.ffbiz.de"},
     # Universitäten
     "humboldt-universitaet": {"name": "Humboldt-Universität zu Berlin", "url": "https://www.hu-berlin.de"},
+    # Klassik & Oper
+    "staatsoper-berlin": {"name": "Staatsoper Unter den Linden", "url": "https://www.staatsoper-berlin.de"},
+    "classiccard": {"name": "ClassicCard", "url": "https://www.classiccard.de"},
 }
 
 
@@ -11409,6 +11412,234 @@ def scrape_hu_berlin() -> list[dict]:
     return unique
 
 
+def scrape_staatsoper() -> list[dict]:
+    """Scraped Events von der Staatsoper Unter den Linden."""
+    # Blockliste für Kinderveranstaltungen etc.
+    BLOCKED_PATTERNS = [
+        "kinderkonzert", "familienvorstellung", "schulvorstellung",
+        "führung", "vor-führung", "workshop", "für kinder", "kinder ab",
+        "familienoper", "kinderoper", "jugendprojekt",
+    ]
+
+    events = []
+    now = datetime.now()
+
+    try:
+        resp = requests.get(
+            "https://www.staatsoper-berlin.de/de/spielplan/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[Staatsoper] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    for article in soup.select("article.termin-list__item"):
+        try:
+            # Titel
+            title_tag = article.select_one("h3.termin__title a span")
+            if not title_tag:
+                continue
+            title = title_tag.get_text(strip=True)
+
+            # Filter: Kinderveranstaltungen etc. ausschließen
+            title_lower = title.lower()
+            if any(pattern in title_lower for pattern in BLOCKED_PATTERNS):
+                continue
+
+            # Link
+            link_tag = article.select_one("h3.termin__title a")
+            href = link_tag.get("href", "") if link_tag else ""
+            event_link = f"https://www.staatsoper-berlin.de{href}" if href.startswith("/") else href
+
+            # Datum und Uhrzeit aus time-Tag
+            time_tag = article.select_one("time[datetime]")
+            if not time_tag:
+                continue
+            datetime_str = time_tag.get("datetime", "")
+            if not datetime_str:
+                continue
+
+            try:
+                # Format: "2026-03-14 19:00:00"
+                event_date = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            event_time = event_date.strftime("%H:%M")
+
+            # Spielstätte
+            venue_tag = article.select_one(".termin__spielstaette a")
+            venue_name = venue_tag.get_text(strip=True) if venue_tag else "Staatsoper Unter den Linden"
+
+            # Werkinfo als Beschreibung
+            werkinfo = article.select_one(".termin__werkinfo")
+            description = werkinfo.get_text(strip=True) if werkinfo else ""
+
+            # Auch Werkinfo auf Blocked Patterns prüfen
+            if description and any(pattern in description.lower() for pattern in BLOCKED_PATTERNS):
+                continue
+
+            # Venue-Slug basierend auf Spielstätte
+            venue_slug = get_or_create_venue(
+                name=venue_name,
+                adresse="Unter den Linden 7, 10117 Berlin",
+                bezirk="mitte",
+                url="https://www.staatsoper-berlin.de",
+            )
+
+            event_id = hashlib.md5(f"staatsoper-{event_link}-{datetime_str}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": event_time,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": "Unter den Linden 7, 10117 Berlin",
+                "bezirk": "mitte",
+                "type": "konzert",
+                "description": description,
+                "link": event_link,
+                "source": "staatsoper",
+            })
+        except Exception:
+            continue
+
+    print(f"[Staatsoper] {len(events)} Events geladen")
+    return events
+
+
+def scrape_classiccard() -> list[dict]:
+    """Scraped Konzerte von ClassicCard."""
+    # Blockliste
+    BLOCKED_PATTERNS = [
+        "kinderkonzert", "familienvorstellung", "schulvorstellung",
+        "führung", "workshop", "für kinder", "kinder ab",
+        "familienkonzert", "jugendkonzert",
+    ]
+
+    events = []
+    now = datetime.now()
+
+    try:
+        resp = requests.get(
+            "https://www.classiccard.de/de/category/konzert/",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[ClassicCard] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    for link in soup.select("a[href*='/event/']"):
+        try:
+            href = link.get("href", "")
+            if not href or "/event/" not in href:
+                continue
+
+            event_link = f"https://www.classiccard.de{href}" if href.startswith("/") else href
+
+            # Titel - oft im ersten relevanten Text-Element
+            texts = []
+            for elem in link.select("p, span, div, h2, h3"):
+                text = elem.get_text(strip=True)
+                if text and len(text) > 2:
+                    texts.append(text)
+
+            if len(texts) < 2:
+                continue
+
+            # Versuche Struktur zu parsen: Venue, Titel, Typ, Datum
+            venue_name = ""
+            title = ""
+            event_time = ""
+            event_date = None
+
+            for text in texts:
+                # Datum erkennen: "Do, 05.03.2026, 18:30Uhr"
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4}),?\s*(\d{1,2}):(\d{2})", text)
+                if date_match:
+                    day, month, year, hour, minute = map(int, date_match.groups())
+                    event_date = datetime(year, month, day, hour, minute)
+                    event_time = f"{hour:02d}:{minute:02d}"
+                    continue
+
+                # Bekannte Venues
+                if any(v in text for v in ["Pierre Boulez Saal", "Konzerthaus", "Philharmonie", "Staatsoper", "Komische Oper"]):
+                    venue_name = text
+                    continue
+
+                # Typ und Status überspringen
+                if text.lower() in ["konzert", "oper", "ballett", "ausverkauft", "beliebt"]:
+                    continue
+
+                # Sonst ist es wahrscheinlich der Titel
+                if not title and len(text) > 5:
+                    title = text
+
+            if not title or not event_date:
+                continue
+
+            # Filter
+            title_lower = title.lower()
+            if any(pattern in title_lower for pattern in BLOCKED_PATTERNS):
+                continue
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            if not venue_name:
+                venue_name = "Konzerthaus Berlin"
+
+            venue_slug = get_or_create_venue(
+                name=venue_name,
+                bezirk="mitte",
+                url="https://www.classiccard.de",
+            )
+
+            event_id = hashlib.md5(f"classiccard-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": event_time,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "bezirk": "mitte",
+                "type": "konzert",
+                "description": "",
+                "link": event_link,
+                "source": "classiccard",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        if e["link"] not in seen:
+            seen.add(e["link"])
+            unique.append(e)
+
+    print(f"[ClassicCard] {len(unique)} Events geladen")
+    return unique
+
+
 def scrape_criticaltheory() -> list[dict]:
     """Scraped Events von Critical Theory Berlin (KTB)."""
     events = []
@@ -11678,6 +11909,8 @@ def refresh_cache():
         (scrape_luftschloss, "Luftschloss"),
         (scrape_criticaltheory, "Critical Theory Berlin"),
         (scrape_hu_berlin, "HU Berlin"),
+        (scrape_staatsoper, "Staatsoper"),
+        (scrape_classiccard, "ClassicCard"),
     ]
 
     try:
