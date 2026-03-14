@@ -14,7 +14,7 @@
 <div class="event-list">
     {% if events %}
         <p class="result-count">{{ events|length }} Ergebnis{% if events|length != 1 %}se{% endif %}</p>
-        {{ event_list_with_dates(events, event_types) }}
+        {{ event_list_with_dates(events, event_types, venue_logos=venue_logos, mono_logos=mono_logos) }}
     {% elif query %}
         <p class="no-events">Keine Ergebnisse für "{{ query }}"</p>
     {% else %}
