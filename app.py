@@ -34,6 +34,107 @@ app.config["SESSION_PERMANENT"] = False
 Session(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Proxy Cache (stoeberkiste Render Disk)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PROXY_CACHE_URL = os.environ.get(
+    "PROXY_CACHE_URL",
+    "https://www.kleinestoeberkiste.de/api/terminliste-cache"
+)
+_PROXY_CACHE_API_KEY = os.environ.get("TERMINLISTE_API_KEY", "")
+
+
+def _load_events_from_proxy_cache() -> list[dict]:
+    """Lädt Events vom Proxy-Cache (stoeberkiste Render Disk).
+
+    Wird beim Start verwendet um Events sofort verfügbar zu haben,
+    bevor das Scraping abgeschlossen ist.
+    """
+    if not _PROXY_CACHE_API_KEY:
+        print("[ProxyCache] Kein TERMINLISTE_API_KEY konfiguriert")
+        return []
+
+    try:
+        resp = requests.get(
+            _PROXY_CACHE_URL,
+            headers={"X-API-Key": _PROXY_CACHE_API_KEY},
+            timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        events = data.get("events", [])
+        timestamp = data.get("timestamp")
+
+        # Datetime-Strings zurück in datetime-Objekte konvertieren
+        for event in events:
+            if event.get("date") and isinstance(event["date"], str):
+                try:
+                    event["date"] = dateparser.parse(event["date"])
+                except (ValueError, TypeError):
+                    pass
+
+        print(f"[ProxyCache] {len(events)} Events geladen (Stand: {timestamp})")
+        return events
+
+    except requests.exceptions.RequestException as e:
+        print(f"[ProxyCache] Fehler beim Laden: {e}")
+        return []
+    except Exception as e:
+        print(f"[ProxyCache] Unerwarteter Fehler: {e}")
+        return []
+
+
+def _save_events_to_proxy_cache(events: list[dict]) -> bool:
+    """Speichert Events im Proxy-Cache (stoeberkiste Render Disk).
+
+    Wird nach jedem erfolgreichen Scraping aufgerufen um den
+    Cache für Restarts/Deploys aktuell zu halten.
+    """
+    if not _PROXY_CACHE_API_KEY:
+        print("[ProxyCache] Kein TERMINLISTE_API_KEY - Speichern übersprungen")
+        return False
+
+    try:
+        # Events für JSON serialisierbar machen
+        serializable_events = []
+        for event in events:
+            event_copy = event.copy()
+            # datetime zu ISO-String
+            if event_copy.get("date") and isinstance(event_copy["date"], datetime):
+                event_copy["date"] = event_copy["date"].isoformat()
+            serializable_events.append(event_copy)
+
+        payload = {
+            "events": serializable_events,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        resp = requests.post(
+            _PROXY_CACHE_URL,
+            json=payload,
+            headers={"X-API-Key": _PROXY_CACHE_API_KEY},
+            timeout=30
+        )
+        resp.raise_for_status()
+
+        result = resp.json()
+        if result.get("success"):
+            print(f"[ProxyCache] {result.get('events_count', len(events))} Events gespeichert")
+            return True
+        else:
+            print(f"[ProxyCache] Fehler: {result.get('error', 'Unbekannter Fehler')}")
+            return False
+
+    except requests.exceptions.RequestException as e:
+        print(f"[ProxyCache] Fehler beim Speichern: {e}")
+        return False
+    except Exception as e:
+        print(f"[ProxyCache] Unerwarteter Fehler: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Datetime Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -11942,6 +12043,9 @@ def refresh_cache():
         _EVENT_CACHE = unique_events
         print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
 
+        # Events im Proxy-Cache speichern (für Restarts/Deploys)
+        _save_events_to_proxy_cache(unique_events)
+
     except Exception as e:
         print(f"[Cache] Fehler beim Aktualisieren des Caches: {e}")
         traceback.print_exc()
@@ -12232,9 +12336,33 @@ import threading
 _CACHE_REFRESH_INTERVAL = 3600  # 1 Stunde
 
 
+def _load_cached_events_on_startup():
+    """Lädt gecachte Events vom Proxy-Cache (für sofortiges Anzeigen nach Deploy)."""
+    global _EVENT_CACHE, _CACHE_LOADING
+
+    cached_events = _load_events_from_proxy_cache()
+    if cached_events:
+        # Nur zukünftige Events behalten
+        now = datetime.now()
+        future_events = [
+            e for e in cached_events
+            if e.get("date") and make_naive(e["date"]) >= now
+        ]
+        if future_events:
+            _EVENT_CACHE = sorted(future_events, key=lambda x: make_naive(x["date"]))
+            _CACHE_LOADING = False
+            print(f"[Startup] {len(_EVENT_CACHE)} Events aus Proxy-Cache geladen (Seite sofort verfügbar)")
+            return True
+    return False
+
+
 def _background_refresh():
     print("[Startup] Lade Events im Hintergrund...")
     try:
+        # Zuerst gecachte Events laden für sofortige Verfügbarkeit
+        had_cached = _load_cached_events_on_startup()
+
+        # Dann frische Daten scrapen
         refresh_cache()
         print("[Startup] Events geladen!")
     except Exception as e:
