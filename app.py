@@ -2180,10 +2180,11 @@ def scrape_brotfabrik() -> list[dict]:
     """
     # Blockliste für Titel (Kinderveranstaltungen)
     BLOCKED_TITLE_PATTERNS = [
-        "für kinder", "kinder ab",
+        "für kinder", "kinder ab", "für kleine",
         "ab 3", "ab 4", "ab 5", "ab 6", "ab 7", "ab 8",
         "alle ab 3", "alle ab 4", "alle ab 5", "alle ab 6",
-        "puppentheater", "kindertheater",
+        "puppentheater", "kindertheater", "figurentheater",
+        "mitmach-märchen", "mitmachmärchen",
     ]
 
     events = []
@@ -2342,6 +2343,10 @@ def scrape_brotfabrik() -> list[dict]:
             # Kostenlos? (prüfe auf Rohdaten vor Bereinigung)
             check_text = (description_raw or description).lower()
             is_free = "eintritt frei" in check_text or "kostenlos" in check_text
+
+            # Filter: Kinderveranstaltungen auch in Beschreibung prüfen
+            if any(pattern in check_text for pattern in BLOCKED_TITLE_PATTERNS):
+                continue
 
             # UID fuer eindeutige ID
             uid_match = re.search(r"UID:(.+?)(?:\r?\n|\Z)", block)
