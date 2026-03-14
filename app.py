@@ -8,6 +8,7 @@ import re
 import gc
 import json
 import hashlib
+import traceback
 import unicodedata
 from html import unescape
 from datetime import datetime, timedelta
@@ -11480,34 +11481,44 @@ def refresh_cache():
         (scrape_criticaltheory, "Critical Theory Berlin"),
     ]
 
-    # Alle Scraper durchlaufen
-    for scraper_func, name in scrapers:
-        all_events.extend(_safe_scrape(scraper_func, name))
+    try:
+        # Alle Scraper durchlaufen
+        for scraper_func, name in scrapers:
+            all_events.extend(_safe_scrape(scraper_func, name))
 
-    # Speicher freigeben
-    gc.collect()
+        # Speicher freigeben
+        gc.collect()
 
-    # Sortieren nach Datum (timezone-aware -> naive für Vergleich)
-    def _sort_key(event):
-        dt = event.get("date", datetime.max)
-        # Falls timezone-aware, zu naive konvertieren (lokale Zeit)
-        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
-    all_events.sort(key=_sort_key)
+        # Sortieren nach Datum (timezone-aware -> naive für Vergleich)
+        def _sort_key(event):
+            dt = event.get("date") or datetime.max
+            # Falls timezone-aware, zu naive konvertieren (lokale Zeit)
+            if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
+        all_events.sort(key=_sort_key)
 
-    # Duplikate entfernen (nach ID)
-    seen_ids = set()
-    unique_events = []
-    for event in all_events:
-        if event["id"] not in seen_ids:
-            seen_ids.add(event["id"])
-            unique_events.append(event)
+        # Duplikate entfernen (nach ID)
+        seen_ids = set()
+        unique_events = []
+        for event in all_events:
+            event_id = event.get("id")
+            if not event_id:
+                print(f"[Cache] Warnung: Event ohne ID übersprungen: {event.get('title', '?')[:50]}")
+                continue
+            if event_id not in seen_ids:
+                seen_ids.add(event_id)
+                unique_events.append(event)
 
-    global _EVENT_CACHE, _CACHE_LOADING
-    _EVENT_CACHE = unique_events
-    _CACHE_LOADING = False
-    print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
+        _EVENT_CACHE = unique_events
+        print(f"[Cache] {len(_EVENT_CACHE)} Events im Cache")
+
+    except Exception as e:
+        print(f"[Cache] Fehler beim Aktualisieren des Caches: {e}")
+        traceback.print_exc()
+
+    finally:
+        _CACHE_LOADING = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -11783,14 +11794,46 @@ def _event_in_time_range(event: dict, start_hour: int, end_hour: int) -> bool:
 # Cache im Hintergrund laden, damit der Server sofort starten kann
 import threading
 
+# Intervall für automatisches Cache-Refresh (in Sekunden)
+_CACHE_REFRESH_INTERVAL = 3600  # 1 Stunde
+
+
 def _background_refresh():
     print("[Startup] Lade Events im Hintergrund...")
-    refresh_cache()
-    print("[Startup] Events geladen!")
+    try:
+        refresh_cache()
+        print("[Startup] Events geladen!")
+    except Exception as e:
+        print(f"[Startup] Unerwarteter Fehler beim Laden der Events: {e}")
+        traceback.print_exc()
+
+
+def _schedule_refresh():
+    """Plant den nächsten automatischen Cache-Refresh."""
+    timer = threading.Timer(_CACHE_REFRESH_INTERVAL, _auto_refresh)
+    timer.daemon = True
+    timer.start()
+
+
+def _auto_refresh():
+    """Führt automatischen Cache-Refresh durch und plant den nächsten."""
+    print("[AutoRefresh] Aktualisiere Event-Cache...")
+    try:
+        refresh_cache()
+        print("[AutoRefresh] Cache aktualisiert!")
+    except Exception as e:
+        print(f"[AutoRefresh] Fehler beim Aktualisieren: {e}")
+        traceback.print_exc()
+    finally:
+        _schedule_refresh()
+
 
 # Starte das Scraping in einem separaten Thread
 _cache_thread = threading.Thread(target=_background_refresh, daemon=True)
 _cache_thread.start()
+
+# Plane den ersten automatischen Refresh nach dem Intervall
+_schedule_refresh()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
