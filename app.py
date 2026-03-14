@@ -36,7 +36,7 @@ Session(app)
 # Datetime Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_naive(dt: datetime) -> datetime:
+def make_naive(dt: datetime | None) -> datetime | None:
     """Konvertiert timezone-aware datetime zu naive lokaler Zeit."""
     if dt is None:
         return None
