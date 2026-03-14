@@ -11,7 +11,7 @@ import hashlib
 import traceback
 import unicodedata
 from html import unescape
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_session import Session
 import requests
@@ -373,9 +373,18 @@ def get_events() -> list[dict]:
     return _EVENT_CACHE
 
 
-def get_events_by_date(date: datetime) -> list[dict]:
+def get_events_by_date(date: datetime | date) -> list[dict]:
     """Filtert Events nach Datum."""
-    target_date = date.date() if hasattr(date, 'date') else date
+    if isinstance(date, datetime):
+        target_date = date.date()
+    elif isinstance(date, date):
+        target_date = date
+    else:
+        # Fallback: versuche, das Eingabedatum in ein datetime-Objekt zu parsen
+        parsed = dateparser.parse(str(date))
+        if not parsed:
+            raise ValueError(f"Ungültiger Datumstyp für get_events_by_date: {date!r}")
+        target_date = parsed.date()
     return [e for e in _EVENT_CACHE if e.get("date") and make_naive(e["date"]).date() == target_date]
 
 
