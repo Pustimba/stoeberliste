@@ -672,7 +672,9 @@ h2 {
   color: #ffffff;
 }
 
-/* Logo bleibt unverändert beim Hover - nur Text wird weiß */
+.event-card:hover .venue-logo.mono {
+  filter: invert(1);
+}
 
 /* Venue Panel */
 .venue-panel {
@@ -683,7 +685,7 @@ h2 {
   justify-content: center;
   padding: var(--spacing-md);
   min-height: 100px;
-  transition: background 0.25s ease;
+  transition: background 0s;
 }
 
 .venue-panel-link {
@@ -699,7 +701,6 @@ h2 {
   max-width: 140px;
   max-height: 70px;
   object-fit: contain;
-  transition: filter 0.25s ease;
 }
 
 .venue-name-fallback {
@@ -711,7 +712,7 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.03em;
   word-break: break-word;
-  transition: color 0.25s ease;
+  transition: color 0s;
 }
 
 /* Event Details */

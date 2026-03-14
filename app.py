@@ -6,6 +6,7 @@ für linke Subkultur und Politik
 import os
 import re
 import gc
+import colorsys
 import json
 import hashlib
 import traceback
@@ -322,23 +323,63 @@ def get_venue_logo(veranstalter_slug: str) -> str | None:
     return None
 
 
+def _is_monochrome_svg(filepath: str) -> bool:
+    """Prüft ob ein SVG-Logo einfarbig ist (nur eine dominante Farbe)."""
+    try:
+        with open(filepath, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return False
+    hex_re = re.compile(r"#([0-9a-fA-F]{3,6})\b")
+    unique_hues: set[int] = set()
+    has_saturated = False
+    for raw in hex_re.findall(content):
+        c = raw.lower()
+        if len(c) == 3:
+            c = c[0]*2 + c[1]*2 + c[2]*2
+        if len(c) != 6:
+            continue
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        # Skip near-black and near-white
+        if r < 30 and g < 30 and b < 30:
+            continue
+        if r > 225 and g > 225 and b > 225:
+            continue
+        # Use colorsys for reliable RGB→HLS conversion
+        h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+        if s < 0.05:
+            # Desaturated / grey – doesn't count as a distinct hue
+            continue
+        has_saturated = True
+        # h is in [0, 1]; round to nearest 30° bucket (12 buckets total)
+        hue_deg = h * 360.0
+        unique_hues.add(round(hue_deg / 30) % 12)
+    if not has_saturated:
+        # Only black / white / grey → monochrome
+        return True
+    # Monochrome if all saturated colors share the same hue bucket
+    return len(unique_hues) <= 1
+
+
 @app.context_processor
 def inject_venue_logos():
-    """Make venue_logos function available in all templates."""
-    # Scanne einmal alle verfügbaren Logos
+    """Make venue_logos and mono_logos available in all templates."""
     logos_dir = os.path.join(app.static_folder, "img", "logos")
-    venue_logos = {}
+    venue_logos: dict[str, str] = {}
+    mono_logos: set[str] = set()
     if os.path.exists(logos_dir):
         for filename in os.listdir(logos_dir):
-            # Support svg, png, jpg, jpeg
             for ext in (".svg", ".png", ".jpg", ".jpeg"):
                 if filename.endswith(ext):
-                    slug = filename[:-len(ext)]
-                    # Don't overwrite if svg already exists (prefer svg)
+                    slug = filename[: -len(ext)]
                     if slug not in venue_logos or filename.endswith(".svg"):
                         venue_logos[slug] = filename
+                    if ext == ".svg" and _is_monochrome_svg(
+                        os.path.join(logos_dir, filename)
+                    ):
+                        mono_logos.add(slug)
                     break
-    return {"venue_logos": venue_logos}
+    return {"venue_logos": venue_logos, "mono_logos": mono_logos}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

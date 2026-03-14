@@ -16,7 +16,7 @@
                 {% set logo_slug = 'rosa-luxemburg-stiftung' %}
             {% endif %}
             {% if logo_slug in venue_logos %}
-            <img src="{{ url_for('static', filename='img/logos/' + venue_logos[logo_slug]) }}" alt="{{ event.venue_name }}" class="venue-logo">
+            <img src="{{ url_for('static', filename='img/logos/' + venue_logos[logo_slug]) }}" alt="{{ event.venue_name }}" class="venue-logo{% if logo_slug in mono_logos %} mono{% endif %}">
             {% else %}
             <span class="venue-name-fallback">{{ event.venue_name }}</span>
             {% endif %}
