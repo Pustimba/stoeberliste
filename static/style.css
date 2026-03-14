@@ -672,8 +672,12 @@ h2 {
   color: #ffffff;
 }
 
-.event-card:hover .venue-logo.mono {
+.venue-logo.mono {
   filter: invert(1);
+}
+
+.event-card:hover .venue-logo.mono {
+  filter: invert(0);
 }
 
 /* Venue Panel */
