@@ -165,6 +165,8 @@ VERANSTALTER = {
     "publix": {"name": "Publix", "url": "https://www.publix.de"},
     "mendelssohn-remise": {"name": "Mendelssohn-Remise", "url": "http://www.mendelssohn-remise.de"},
     "ffbiz": {"name": "FFBIZ", "url": "https://www.ffbiz.de"},
+    # Universitäten
+    "humboldt-universitaet": {"name": "Humboldt-Universität zu Berlin", "url": "https://www.hu-berlin.de"},
 }
 
 
@@ -11263,6 +11265,145 @@ def scrape_motto_berlin() -> list[dict]:
     return events
 
 
+def scrape_hu_berlin() -> list[dict]:
+    """Scraped Events von der Humboldt-Universität zu Berlin."""
+    events = []
+    venue_name = "Humboldt-Universität zu Berlin"
+    venue_slug = get_or_create_venue(
+        name=venue_name,
+        adresse="Unter den Linden 6, 10117 Berlin",
+        bezirk="mitte",
+        url="https://www.hu-berlin.de",
+    )
+
+    # URL mit Filter für Vorträge (1), Tagungen (4), Ausstellungen (8)
+    calendar_url = (
+        "https://www.hu-berlin.de/veranstaltungen"
+        "?tx_sitepackage_eventlist[action]=search"
+        "&tx_sitepackage_eventlist[controller]=Event"
+        "&tx_sitepackage_eventlist[search][filterCategories][]=1"
+        "&tx_sitepackage_eventlist[search][filterCategories][]=4"
+        "&tx_sitepackage_eventlist[search][filterCategories][]=8"
+    )
+
+    try:
+        resp = requests.get(
+            calendar_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; KleineTerminliste/1.0)"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[HU Berlin] Fehler beim Laden: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    now = datetime.now()
+
+    # Events aus der Liste extrahieren
+    for event_item in soup.select("a[href*='/veranstaltungen/details/']"):
+        try:
+            # Link
+            href = event_item.get("href", "")
+            if not href:
+                continue
+            event_link = f"https://www.hu-berlin.de{href}" if href.startswith("/") else href
+
+            # Container für Daten
+            time_tag = event_item.select_one("time")
+            if not time_tag:
+                continue
+
+            # Datum aus datetime-Attribut
+            datetime_attr = time_tag.get("datetime", "")
+            event_date = None
+            event_time = ""
+
+            if datetime_attr:
+                try:
+                    event_date = dateparser.parse(datetime_attr)
+                except Exception:
+                    pass
+
+            if not event_date:
+                continue
+
+            # Uhrzeit aus div.time extrahieren: "17 – 19:30 Uhr"
+            time_div = event_item.select_one("div.time")
+            if time_div:
+                # Text normalisieren (Whitespace zusammenfassen)
+                time_text = " ".join(time_div.get_text().split())
+                # Startzeit extrahieren: "17 – 19:30 Uhr" oder "17:00 – 19:30 Uhr"
+                time_match = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(?:–|-)", time_text)
+                if time_match:
+                    hour = time_match.group(1).zfill(2)
+                    minute = time_match.group(2) or "00"
+                    event_time = f"{hour}:{minute}"
+
+            # Nur zukünftige Events
+            if event_date.date() < now.date():
+                continue
+
+            # Titel aus h3
+            title_tag = event_item.select_one("h3")
+            title = title_tag.get_text(strip=True) if title_tag else ""
+            if not title:
+                continue
+
+            # Event-Typ aus span.category
+            event_type_tag = event_item.select_one("span.category")
+            type_text = event_type_tag.get_text(strip=True).lower() if event_type_tag else ""
+
+            if "vortrag" in type_text or "lecture" in type_text or "ringvorlesung" in type_text:
+                event_type = "diskussion"
+            elif "tagung" in type_text or "konferenz" in type_text or "conference" in type_text:
+                event_type = "diskussion"
+            elif "ausstellung" in type_text or "exhibition" in type_text:
+                event_type = "ausstellung"
+            elif "webinar" in type_text or "online" in type_text:
+                event_type = "workshop"
+            elif "workshop" in type_text:
+                event_type = "workshop"
+            elif "podium" in type_text or "diskussion" in type_text:
+                event_type = "diskussion"
+            else:
+                event_type = "diskussion"  # Default für Uni-Events
+
+            # Ort aus itemprop="location"
+            location_tag = event_item.select_one("[itemprop='location']")
+            event_address = location_tag.get_text(strip=True) if location_tag else "Unter den Linden 6, 10117 Berlin"
+
+            event_id = hashlib.md5(f"hu-berlin-{event_link}".encode()).hexdigest()[:12]
+
+            events.append({
+                "id": event_id,
+                "title": title,
+                "date": event_date,
+                "time": event_time,
+                "venue_slug": venue_slug,
+                "venue_name": venue_name,
+                "venue_address": event_address,
+                "bezirk": "mitte",
+                "type": event_type,
+                "description": "",
+                "link": event_link,
+                "source": "hu-berlin",
+            })
+        except Exception:
+            continue
+
+    # Duplikate entfernen
+    seen = set()
+    unique = []
+    for e in events:
+        if e["link"] not in seen:
+            seen.add(e["link"])
+            unique.append(e)
+
+    print(f"[HU Berlin] {len(unique)} Events geladen")
+    return unique
+
+
 def scrape_criticaltheory() -> list[dict]:
     """Scraped Events von Critical Theory Berlin (KTB)."""
     events = []
@@ -11531,6 +11672,7 @@ def refresh_cache():
         (scrape_schaubuehne, "Schaubühne"),
         (scrape_luftschloss, "Luftschloss"),
         (scrape_criticaltheory, "Critical Theory Berlin"),
+        (scrape_hu_berlin, "HU Berlin"),
     ]
 
     try:
